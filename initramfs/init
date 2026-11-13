@@ -1,0 +1,109 @@
+#!/bin/busybox sh
+# SPDX-License-Identifier: MIT
+# Redmi 12 5G (sky) mainline initramfs init.
+# - brings up a USB gadget (serial ACM + Ethernet NCM), a DHCP server for the host and key-only ssh (dropbear)
+# - safety net: unless something extends the timer, the phone reboots (back to Android on the default boot path) after $TIMEOUT s
+# - /etc/autoroot (built into the hands-free image): mounts the partition named "linuxroot" on /dev/sda22 and switches to it
+# - /run/switch-root hook: write the path of a prepared root there and PID 1 switches into it
+/bin/busybox --install -s /bin 2>/dev/null
+export PATH=/bin:/sbin:/usr/bin:/usr/sbin HOME=/root
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev
+mkdir -p /dev/pts && mount -t devpts devpts /dev/pts
+mount -t tmpfs tmpfs /tmp
+mount -t tmpfs tmpfs /run
+mount -t configfs configfs /sys/kernel/config
+exec >/dev/console 2>&1 </dev/null
+
+echo
+echo "*** sky mainline initramfs: PID 1 reached ***"
+TIMEOUT=${TIMEOUT:-420}   # seconds until the safety reboot; `touch /tmp/stay` (over ssh) extends it by an hour each time
+
+# USB gadget: ACM serial + NCM network, fake locally administered MAC addresses
+G=/sys/kernel/config/usb_gadget/g1
+UDC=$(ls /sys/class/udc 2>/dev/null | head -n1)
+if [ -n "$UDC" ]; then
+	mkdir $G
+	echo 0x1d6b > $G/idVendor
+	echo 0x0104 > $G/idProduct
+	mkdir $G/strings/0x409
+	echo "sky-mainline" > $G/strings/0x409/manufacturer
+	echo "Redmi 12 5G mainline" > $G/strings/0x409/product
+	echo "sky-mainline" > $G/strings/0x409/serialnumber
+	mkdir $G/configs/c.1
+	mkdir $G/configs/c.1/strings/0x409
+	echo "ACM+NCM" > $G/configs/c.1/strings/0x409/configuration
+	mkdir $G/functions/acm.usb0
+	mkdir $G/functions/ncm.usb0
+	echo 02:5c:6d:00:00:01 > $G/functions/ncm.usb0/host_addr
+	echo 02:5c:6d:00:00:02 > $G/functions/ncm.usb0/dev_addr
+	ln -s $G/functions/acm.usb0 $G/configs/c.1/
+	ln -s $G/functions/ncm.usb0 $G/configs/c.1/
+	echo "$UDC" > $G/UDC && echo "gadget bound to $UDC" || echo "gadget bind FAILED"
+else
+	echo "NO UDC: dwc3 did not register a controller"
+fi
+
+# network: the phone is 192.168.7.1/24 and hands the host an address by DHCP
+for i in 1 2 3 4 5 6 7 8 9 10; do [ -d /sys/class/net/usb0 ] && break; sleep 1; done
+ifconfig usb0 192.168.7.1 netmask 255.255.255.0 up
+cat > /tmp/udhcpd.conf <<'EOT'
+start 192.168.7.10
+end 192.168.7.50
+interface usb0
+lease_file /tmp/udhcpd.leases
+opt router 192.168.7.1
+opt dns 192.168.7.1
+EOT
+busybox-extras udhcpd /tmp/udhcpd.conf
+echo "usb0=192.168.7.1/24, dhcp server up"
+
+# ssh: key-only root login (authorized_keys is baked into the image by tools/build-initramfs.sh)
+mkdir -p /etc/dropbear /root/.ssh
+chmod 700 /root/.ssh
+[ -e /etc/dropbear/dropbear_ed25519_host_key ] || dropbearkey -t ed25519 -f /etc/dropbear/dropbear_ed25519_host_key >/dev/null 2>&1
+dropbear -s -p 22 -E 2>/tmp/dropbear.log
+sleep 1
+netstat -ltn 2>/dev/null | grep -q ':22 ' && echo "dropbear listening on :22" || { echo "dropbear FAILED:"; cat /tmp/dropbear.log; }
+
+# root shell on the gadget serial port, respawned
+( for i in 1 2 3 4 5 6 7 8 9 10; do [ -c /dev/ttyGS0 ] && break; sleep 1; done
+  while :; do
+	setsid sh -c 'echo $$ > /run/gs0.pid; exec sh -i </dev/ttyGS0 >/dev/ttyGS0 2>&1'
+	sleep 1
+  done ) &
+
+# safety reboot; touch /tmp/stay to extend. dmesg is mirrored to /tmp/dmesg.txt for post-mortems.
+( left=$TIMEOUT
+  while [ $left -gt 0 ]; do
+	sleep 10; left=$((left-10))
+	if [ -e /tmp/stay ]; then rm -f /tmp/stay; left=3600; echo "timer extended"; fi
+	dmesg > /tmp/dmesg.txt 2>/dev/null
+  done
+  echo "*** timeout: rebooting ***"
+  sync; reboot -f ) &
+TIMERPID=$!
+
+# autoroot (hands-free boot, marker file /etc/autoroot): without a host, mount the Linux root by itself.
+# Only a partition whose PARTNAME is linuxroot is mounted. /run/sky-keep tells the new root not to run its own failsafe reboot.
+# If anything fails the safety reboot above still returns the phone to Android.
+if [ -e /etc/autoroot ]; then
+( for i in $(seq 1 120); do [ -b /dev/sda22 ] && break; sleep 1; done
+  if grep -qx PARTNAME=linuxroot /sys/block/sda/sda22/uevent 2>/dev/null; then
+	mkdir -p /mnt/root && mount -t ext4 /dev/sda22 /mnt/root && touch /run/sky-keep && echo /mnt/root > /run/switch-root && echo "autoroot: switching to sda22"
+  else echo "autoroot: sda22 is not linuxroot, staying in the initramfs (timer reboots to Android)"; fi ) &
+fi
+
+# switch-root hook: a root prepared elsewhere (tools/push-debian.sh builds one in a tmpfs, autoroot mounts the partition) is entered
+# by writing its path to /run/switch-root. PID 1 must do the switch itself.
+while [ ! -s /run/switch-root ]; do sleep 1; done
+NEWROOT=$(cat /run/switch-root)
+echo "*** switching root to $NEWROOT ***"
+kill $TIMERPID 2>/dev/null   # the old-root reboot timer must not survive into the new root
+# stop the old-root daemons so the new root's own sshd/networkd/getty own port 22, usb0 and ttyGS0
+kill $(jobs -p) 2>/dev/null; kill $(cat /run/gs0.pid 2>/dev/null) 2>/dev/null; killall dropbear busybox-extras 2>/dev/null; sleep 1
+ifconfig usb0 0.0.0.0 2>/dev/null
+mkdir -p $NEWROOT/proc $NEWROOT/sys $NEWROOT/dev $NEWROOT/run
+mount --move /proc $NEWROOT/proc; mount --move /sys $NEWROOT/sys; mount --move /dev $NEWROOT/dev; mount --move /run $NEWROOT/run
+exec /bin/busybox switch_root $NEWROOT /sbin/init
