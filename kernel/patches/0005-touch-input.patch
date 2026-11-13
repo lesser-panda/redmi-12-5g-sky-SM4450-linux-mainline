@@ -1,0 +1,1428 @@
+From: Andy Zhang and contributors (see kernel/third-party/README.md for imported parts)
+Subject: [PATCH 0005/8] FocalTech FT8720 SPI touchscreen and input changes
+
+focaltech-ft8720-spi.c: new driver written for this project (SPI touchscreen with host-side firmware download).
+edt-ft5x06: follow the panel power state (ROCKNIX 0061). rsinput/aw88166 are ROCKNIX files kept so the tree matches what was built; they are unused on this phone.
+
+Apply with: git apply (from the root of a Linux 7.3 tree).
+---
+diff --git a/Documentation/devicetree/bindings/input/touchscreen/focaltech,ft8720-spi.yaml b/Documentation/devicetree/bindings/input/touchscreen/focaltech,ft8720-spi.yaml
+new file mode 100644
+index 000000000..76e55b8d5
+--- /dev/null
++++ b/Documentation/devicetree/bindings/input/touchscreen/focaltech,ft8720-spi.yaml
+@@ -0,0 +1,71 @@
++# SPDX-License-Identifier: GPL-2.0-only OR BSD-2-Clause
++%YAML 1.2
++---
++$id: http://devicetree.org/schemas/input/touchscreen/focaltech,ft8720-spi.yaml#
++$schema: http://devicetree.org/meta-schemas/core.yaml#
++
++title: FocalTech FT8720 SPI touchscreen controller
++
++maintainers:
++  - Unassigned <unassigned@example.invalid>
++
++description:
++  FocalTech FT8720 touch and display driver IC (TDDI) connected over SPI. The
++  controller executes from RAM and needs its firmware downloaded by the host
++  after every hardware reset.
++
++allOf:
++  - $ref: touchscreen.yaml#
++  - $ref: /schemas/spi/spi-peripheral-props.yaml#
++
++properties:
++  compatible:
++    const: focaltech,ft8720-spi
++
++  reg:
++    maxItems: 1
++
++  spi-max-frequency:
++    maximum: 9600000
++
++  interrupts:
++    maxItems: 1
++    description: Falling edge asserted when a touch report is ready.
++
++  reset-gpios:
++    maxItems: 1
++    description: Active-low reset line.
++
++  firmware-name:
++    description: Firmware image loaded with request_firmware() at probe.
++
++required:
++  - compatible
++  - reg
++  - interrupts
++  - reset-gpios
++  - firmware-name
++
++unevaluatedProperties: false
++
++examples:
++  - |
++    #include <dt-bindings/gpio/gpio.h>
++    #include <dt-bindings/interrupt-controller/irq.h>
++
++    spi {
++        #address-cells = <1>;
++        #size-cells = <0>;
++
++        touchscreen@0 {
++            compatible = "focaltech,ft8720-spi";
++            reg = <0>;
++            spi-max-frequency = <9600000>;
++            interrupts-extended = <&tlmm 13 IRQ_TYPE_EDGE_FALLING>;
++            reset-gpios = <&tlmm 12 GPIO_ACTIVE_LOW>;
++            firmware-name = "focaltech/ft8720-sky.bin";
++            touchscreen-size-x = <1080>;
++            touchscreen-size-y = <2460>;
++        };
++    };
++...
+diff --git a/drivers/input/joystick/Kconfig b/drivers/input/joystick/Kconfig
+index 7755e5b45..0da3c0f44 100644
+--- a/drivers/input/joystick/Kconfig
++++ b/drivers/input/joystick/Kconfig
+@@ -383,6 +383,10 @@ config JOYSTICK_QWIIC
+ 	  To compile this driver as a module, choose M here: the
+ 	  module will be called qwiic-joystick.
+ 
++config JOYSTICK_RSINPUT
++	tristate "UART Based gamepad driver that found in AYN and Retroid Pocket products"
++	depends on SERIAL_DEV_BUS
++
+ config JOYSTICK_FSIA6B
+ 	tristate "FlySky FS-iA6B RC Receiver"
+ 	select SERIO
+diff --git a/drivers/input/joystick/Makefile b/drivers/input/joystick/Makefile
+index 9976f596a..3de503e29 100644
+--- a/drivers/input/joystick/Makefile
++++ b/drivers/input/joystick/Makefile
+@@ -28,6 +28,7 @@ obj-$(CONFIG_JOYSTICK_N64)		+= n64joy.o
+ obj-$(CONFIG_JOYSTICK_PSXPAD_SPI)	+= psxpad-spi.o
+ obj-$(CONFIG_JOYSTICK_PXRC)		+= pxrc.o
+ obj-$(CONFIG_JOYSTICK_QWIIC)		+= qwiic-joystick.o
++obj-$(CONFIG_JOYSTICK_RSINPUT)		+= rsinput.o
+ obj-$(CONFIG_JOYSTICK_SEESAW)		+= adafruit-seesaw.o
+ obj-$(CONFIG_JOYSTICK_SENSEHAT)	+= sensehat-joystick.o
+ obj-$(CONFIG_JOYSTICK_SIDEWINDER)	+= sidewinder.o
+diff --git a/drivers/input/joystick/rsinput.c b/drivers/input/joystick/rsinput.c
+new file mode 100644
+index 000000000..7e9be405c
+--- /dev/null
++++ b/drivers/input/joystick/rsinput.c
+@@ -0,0 +1,706 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * RSInput Gamepad Driver
++ *
++ * Copyright (C) 2024 Teguh Sobirin <teguh@sobir.in>
++ *
++ */
++
++#include <linux/errno.h>
++#include <linux/gpio/consumer.h>
++#include <linux/init.h>
++#include <linux/input.h>
++#include <linux/kernel.h>
++#include <linux/module.h>
++#include <linux/minmax.h>
++#include <linux/of.h>
++#include <linux/regulator/consumer.h>
++#include <linux/serdev.h>
++#include <linux/workqueue.h>
++#include <linux/slab.h>
++#include <uapi/linux/sched/types.h>
++
++static int update_params=0;
++
++static int trigger_left_max=0x610;
++static int trigger_left_deadzone=0x0;
++static int trigger_left_antideadzone=0x0;
++
++static int trigger_right_max=0x610;
++static int trigger_right_deadzone=0x0;
++static int trigger_right_antideadzone=0x0;
++
++static int axis_leftx_min=-0x580;
++static int axis_leftx_center=0x0;
++static int axis_leftx_max=0x580;
++static int axis_leftx_deadzone=0x0;
++static int axis_leftx_antideadzone=0x0;
++
++static int axis_lefty_min=-0x580;
++static int axis_lefty_center=0x0;
++static int axis_lefty_max=0x580;
++static int axis_lefty_deadzone=0x0;
++static int axis_lefty_antideadzone=0x0;
++
++static int axis_rightx_min=-0x580;
++static int axis_rightx_center=0x0;
++static int axis_rightx_max=0x580;
++static int axis_rightx_deadzone=0x0;
++static int axis_rightx_antideadzone=0x0;
++
++static int axis_righty_min=-0x580;
++static int axis_righty_center=0x0;
++static int axis_righty_max=0x580;
++static int axis_righty_deadzone=0x0;
++static int axis_righty_antideadzone=0x0;
++
++module_param(update_params,int,0660);
++
++module_param(trigger_left_max,int,0660);
++module_param(trigger_left_deadzone,int,0660);
++module_param(trigger_left_antideadzone,int,0660);
++
++module_param(trigger_right_max,int,0660);
++module_param(trigger_right_deadzone,int,0660);
++module_param(trigger_right_antideadzone,int,0660);
++
++module_param(axis_leftx_min,int,0660);
++module_param(axis_leftx_center,int,0660);
++module_param(axis_leftx_max,int,0660);
++module_param(axis_leftx_deadzone,int,0660);
++module_param(axis_leftx_antideadzone,int,0660);
++
++module_param(axis_lefty_min,int,0660);
++module_param(axis_lefty_center,int,0660);
++module_param(axis_lefty_max,int,0660);
++module_param(axis_lefty_deadzone,int,0660);
++module_param(axis_lefty_antideadzone,int,0660);
++
++module_param(axis_rightx_min,int,0660);
++module_param(axis_rightx_center,int,0660);
++module_param(axis_rightx_max,int,0660);
++module_param(axis_rightx_deadzone,int,0660);
++module_param(axis_rightx_antideadzone,int,0660);
++
++module_param(axis_righty_min,int,0660);
++module_param(axis_righty_center,int,0660);
++module_param(axis_righty_max,int,0660);
++module_param(axis_righty_deadzone,int,0660);
++module_param(axis_righty_antideadzone,int,0660);
++
++#define INT_SIGN(X) ((X > 0) - (X < 0))
++
++#define FRAME_HEAD_1              0xA5
++#define FRAME_HEAD_2              0xD3
++#define FRAME_HEAD_3              0x5A
++#define FRAME_HEAD_4              0x3D
++
++#define CMD_COMMOD                0x01
++#define CMD_STATUS                0x02
++
++#define DATA_COMMOD_VERSION       0x02
++#define DATA_COMMOD_SET_PAR       0x05
++
++#define FRAME_POS_SEQ             4
++#define FRAME_POS_CMD             5
++#define FRAME_POS_LEN_L           6
++#define FRAME_POS_LEN_H           7
++#define FRAME_POS_DATA_1          8
++#define FRAME_POS_DATA_2          9
++#define FRAME_POS_DATA_3          10
++#define FRAME_POS_DATA_4          11
++#define FRAME_POS_DATA_5          12
++#define FRAME_POS_DATA_6          13
++#define FRAME_POS_DATA_7          14
++#define FRAME_POS_DATA_8          15
++#define FRAME_POS_DATA_9          16
++#define FRAME_POS_DATA_10         17
++#define FRAME_POS_DATA_11         18
++#define FRAME_POS_DATA_12         19
++#define FRAME_POS_DATA_13         20
++#define FRAME_POS_DATA_14         21
++
++#define MCU_PKT_SIZE_MIN          9
++
++#define MCU_VERSION_MAX_LEN       64
++
++struct rsinput_driver {
++    struct serdev_device *serdev;
++    struct input_dev *input;
++    struct regulator *vdd;
++    struct gpio_desc *boot_gpio;
++    struct gpio_desc *enable_gpio;
++    struct gpio_desc *reset_gpio;
++    bool invert_x;
++    bool invert_y;
++    bool invert_rx;
++    bool invert_ry;
++    bool digital_triggers;
++    uint8_t rx_buf[1024];
++    uint8_t sequence_number;
++    struct delayed_work rx_watchdog;
++    unsigned int valid_frames;
++    unsigned int wd_seen_frames;
++    unsigned int wd_attempts;
++    unsigned int wd_probes;
++    bool version_logged;
++};
++
++static const unsigned int keymap[] = {
++    BTN_DPAD_UP, BTN_DPAD_DOWN, BTN_DPAD_LEFT, BTN_DPAD_RIGHT,
++    BTN_NORTH,   BTN_WEST,	    BTN_EAST,	   BTN_SOUTH,
++    BTN_TL,	     BTN_TR,	    BTN_SELECT,	   BTN_START,
++    BTN_THUMBL,  BTN_THUMBR,    BTN_MODE,	   BTN_BACK
++};
++
++#define RSINPUT_WD_DELAY          msecs_to_jiffies(1000)
++#define RSINPUT_WD_PATROL         msecs_to_jiffies(5000)
++#define RSINPUT_WD_MCU_BOOT       msecs_to_jiffies(3000)
++#define RSINPUT_WD_PORT_CYCLES    2
++
++static uint8_t compute_checksum(const uint8_t *data, size_t len) {
++    uint8_t checksum = 0;
++
++    for (size_t i = FRAME_POS_SEQ; i < len - 1; i++) {
++        checksum ^= data[i];
++    }
++
++    return checksum;
++}
++
++static int rsinput_send_command(struct rsinput_driver *drv, uint8_t cmd, const uint8_t *data, size_t len) {
++    uint8_t frame[256];
++    uint8_t checksum = 0;
++    size_t frame_len = 0;
++
++    frame[frame_len++] = FRAME_HEAD_1;
++    frame[frame_len++] = FRAME_HEAD_2;
++    frame[frame_len++] = FRAME_HEAD_3;
++    frame[frame_len++] = FRAME_HEAD_4;
++
++    frame[frame_len++] = drv->sequence_number;
++    drv->sequence_number++;
++
++    frame[frame_len++] = cmd;
++
++    frame[frame_len++] = len & 0xFF;
++    frame[frame_len++] = (len >> 8) & 0xFF;
++
++    if (data && len) {
++        memcpy(&frame[frame_len], data, len);
++        frame_len += len;
++    }
++
++    checksum = compute_checksum(frame, frame_len + 1);
++    frame[frame_len++] = checksum;
++
++    return serdev_device_write_buf(drv->serdev, frame, frame_len);
++}
++
++static int rsinput_init_commands(struct rsinput_driver *drv) {
++    int error;
++
++    if (drv->boot_gpio)
++        gpiod_set_value_cansleep(drv->boot_gpio, 0);
++
++    if (drv->reset_gpio)
++        gpiod_set_value_cansleep(drv->reset_gpio, 0);
++
++    msleep(100);
++
++    if (drv->enable_gpio)
++        gpiod_set_value_cansleep(drv->enable_gpio, 1);
++
++    if (drv->reset_gpio)
++        gpiod_set_value_cansleep(drv->reset_gpio, 1);
++
++    msleep(100);
++    uint8_t version_request[] = {DATA_COMMOD_VERSION};
++    error = rsinput_send_command(drv, CMD_COMMOD, version_request, sizeof(version_request));
++    if (error < 0) {
++        dev_err(&drv->serdev->dev, "Failed to request MCU version: %d\n", error);
++        return error;
++    }
++
++    msleep(100);
++    uint8_t mcu_params[] = {
++        DATA_COMMOD_SET_PAR,
++        0x01,
++        0x00, 0x00, 0x00, 0x28,
++        0x00, 0x00, 0x00, 0x07
++    };
++    error = rsinput_send_command(drv, CMD_COMMOD, mcu_params, sizeof(mcu_params));
++    if (error < 0) {
++        dev_err(&drv->serdev->dev, "Failed to set MCU parameters: %d\n", error);
++        return error;
++    }
++
++    return 0;
++}
++
++static void handle_cmd_commod(struct rsinput_driver *drv, const uint8_t *data, size_t payload_length) {
++    switch (data[FRAME_POS_DATA_1]) {
++        case DATA_COMMOD_VERSION:
++            if (payload_length >= 1) {
++                char mcu_version[MCU_VERSION_MAX_LEN] = {0};
++                size_t version_length = payload_length;
++                if (version_length > MCU_VERSION_MAX_LEN - 1) {
++                    version_length = MCU_VERSION_MAX_LEN - 1;
++                }
++                memcpy(mcu_version, &data[FRAME_POS_DATA_1], version_length);
++                mcu_version[version_length] = '\0';
++                if (!drv->version_logged) {
++                    dev_info(&drv->serdev->dev, "MCU Version: %s\n", mcu_version);
++                    drv->version_logged = true;
++                }
++            } else {
++                dev_err(&drv->serdev->dev, "Invalid MCU version response length\n");
++            }
++            break;
++        case DATA_COMMOD_SET_PAR:
++            dev_info(&drv->serdev->dev, "MCU parameters set successfully\n");
++            break;
++        default:
++            dev_dbg(&drv->serdev->dev, "Unhandled CMD_COMMOD sub-command: 0x%02x\n", data[FRAME_POS_DATA_1]);
++            break;
++    }
++}
++
++static void handle_cmd_status(struct rsinput_driver *drv, const uint8_t *data, size_t payload_length) {
++    if (payload_length >= 6) {
++    static unsigned long prev_states;
++    unsigned long keys = data[FRAME_POS_DATA_1] | (data[FRAME_POS_DATA_2] << 8);
++    unsigned long current_states = keys, changes;
++    int i;
++
++    if (update_params) {
++        input_set_abs_params(drv->input, ABS_X,
++            INT_SIGN(axis_leftx_min) * ( abs(axis_leftx_min) - axis_leftx_antideadzone ),
++            INT_SIGN(axis_leftx_max) * ( abs(axis_leftx_max) - axis_leftx_antideadzone ),
++            0, 0);
++        input_set_abs_params(drv->input, ABS_Y,
++            INT_SIGN(axis_lefty_min) * ( abs(axis_lefty_min) - axis_lefty_antideadzone ),
++            INT_SIGN(axis_lefty_max) * ( abs(axis_lefty_max) - axis_lefty_antideadzone ),
++             0, 0);
++        input_set_abs_params(drv->input, ABS_RX,
++            INT_SIGN(axis_rightx_min) * ( abs(axis_rightx_min) - axis_rightx_antideadzone ),
++            INT_SIGN(axis_rightx_max) * ( abs(axis_rightx_max) - axis_rightx_antideadzone ),
++            0, 0);
++        input_set_abs_params(drv->input, ABS_RY,
++            INT_SIGN(axis_righty_min) * ( abs(axis_righty_min) - axis_righty_antideadzone ),
++            INT_SIGN(axis_righty_max) * ( abs(axis_righty_max) - axis_righty_antideadzone ),
++             0, 0);
++        if (!drv->digital_triggers) {
++            input_set_abs_params(drv->input, ABS_Z, 0, trigger_left_max - trigger_left_antideadzone, 0, 30);
++            input_set_abs_params(drv->input, ABS_RZ, 0, trigger_right_max - trigger_right_antideadzone, 0, 30);
++        }
++        update_params = 0;
++    }
++
++    bitmap_xor(&changes, &current_states, &prev_states, ARRAY_SIZE(keymap));
++
++    for_each_set_bit(i, &changes, ARRAY_SIZE(keymap)) {
++        input_report_key(drv->input, keymap[i], (current_states & BIT(i)));
++    }
++
++    int16_t raw_trig_l = (data[FRAME_POS_DATA_3] | (data[FRAME_POS_DATA_4] << 8));
++    int16_t z = trigger_left_max - raw_trig_l;
++    z = ( z < trigger_left_deadzone ) ? 0 : z - trigger_left_antideadzone;
++
++    int16_t raw_trig_r = (data[FRAME_POS_DATA_5] | (data[FRAME_POS_DATA_6] << 8));
++    int16_t rz = trigger_right_max - raw_trig_r;
++    rz = ( rz < trigger_right_deadzone ) ? 0 : rz - trigger_right_antideadzone;
++
++    int16_t raw_x = -(int16_t)(data[FRAME_POS_DATA_7] | (data[FRAME_POS_DATA_8] << 8));
++    int16_t x = raw_x + axis_leftx_center;
++    x = ( abs(x) < axis_leftx_deadzone ) ? 0 : INT_SIGN(x) * ( abs(x) - axis_leftx_antideadzone );
++
++    int16_t raw_y = -(int16_t)(data[FRAME_POS_DATA_9] | (data[FRAME_POS_DATA_10] << 8));
++    int16_t y = raw_y + axis_lefty_center;
++    y = ( abs(y) < axis_lefty_deadzone ) ? 0 : INT_SIGN(y) * ( abs(y) - axis_lefty_antideadzone );
++
++    int16_t raw_rx = -(int16_t)(data[FRAME_POS_DATA_11] | (data[FRAME_POS_DATA_12] << 8));
++    int16_t rx = raw_rx + axis_rightx_center;
++    rx = ( abs(rx) < axis_rightx_deadzone ) ? 0 : INT_SIGN(rx) * ( abs(rx) - axis_rightx_antideadzone );
++
++    int16_t raw_ry = -(int16_t)(data[FRAME_POS_DATA_13] | (data[FRAME_POS_DATA_14] << 8));
++    int16_t ry = raw_ry + axis_righty_center;
++    ry = ( abs(ry) < axis_righty_deadzone ) ? 0 : INT_SIGN(ry) * ( abs(ry) - axis_righty_antideadzone );
++
++    if (drv->digital_triggers) {
++        input_report_key(drv->input, BTN_TL2, raw_trig_l != 0);
++        input_report_key(drv->input, BTN_TR2, raw_trig_r != 0);
++    } else {
++        input_report_abs(drv->input, ABS_Z, z);
++        input_report_abs(drv->input, ABS_RZ, rz);
++    }
++    input_report_abs(drv->input, ABS_X, drv->invert_x ? x * (-1) : x);
++    input_report_abs(drv->input, ABS_Y, drv->invert_y ? y * (-1) : y);
++    input_report_abs(drv->input, ABS_RX, drv->invert_rx ? rx * (-1) : rx);
++    input_report_abs(drv->input, ABS_RY, drv->invert_ry ? ry * (-1) : ry);
++
++    input_sync(drv->input);
++    prev_states = keys;
++
++    } else {
++        dev_warn(&drv->serdev->dev, "Invalid CMD_STATUS response length\n");
++    }
++}
++
++static void rsinput_process_data(struct rsinput_driver *drv, const uint8_t *data, size_t len) {
++    while (len >= MCU_PKT_SIZE_MIN) {
++        uint16_t payload_length = data[FRAME_POS_LEN_L] | (data[FRAME_POS_LEN_H] << 8);
++        size_t frame_length = MCU_PKT_SIZE_MIN + payload_length;
++
++        if (len < frame_length) {
++            return;
++        }
++
++        uint8_t received_checksum = data[frame_length - 1];
++        uint8_t computed_checksum = compute_checksum(data, frame_length);
++        if (computed_checksum != received_checksum) {
++            data += frame_length;
++            len -= frame_length;
++            continue;
++        }
++
++        drv->valid_frames++;
++
++        switch (data[FRAME_POS_CMD]) {
++            case CMD_COMMOD:
++                handle_cmd_commod(drv, data, payload_length);
++                break;
++            case CMD_STATUS:
++                handle_cmd_status(drv, data, payload_length);
++                break;
++            default:
++                dev_warn(&drv->serdev->dev, "Unhandled command: 0x%02X\n", data[FRAME_POS_CMD]);
++                break;
++        }
++
++        data += frame_length;
++        len -= frame_length;
++    }
++
++    if (len > 0) {
++        dev_warn(&drv->serdev->dev, "Trailing bytes after processing: %zu\n", len);
++    }
++}
++
++static size_t rsinput_rx(struct serdev_device *serdev, const u8 *data, size_t count) {
++    struct rsinput_driver *drv = serdev_device_get_drvdata(serdev);
++    uint8_t received_checksum, computed_checksum;
++
++    if (!drv || !data || count == 0) {
++        dev_warn_ratelimited(&serdev->dev, "Invalid RX data\n");
++        goto error;
++    }
++
++    if (count > sizeof(drv->rx_buf)) {
++        dev_warn_ratelimited(&serdev->dev, "RX buffer overflow\n");
++        goto error;
++    }
++
++    memcpy(drv->rx_buf, data, count);
++
++    if (count < MCU_PKT_SIZE_MIN) {
++        dev_dbg_ratelimited(&serdev->dev, "Frame too short for checksum validation\n");
++        goto error;
++    }
++
++    received_checksum = drv->rx_buf[count - 1];
++
++    computed_checksum = compute_checksum(drv->rx_buf, count);
++
++    if (computed_checksum != received_checksum) {
++        dev_dbg_ratelimited(&serdev->dev, "Checksum mismatch\n");
++        goto error;
++    }
++
++    rsinput_process_data(drv, drv->rx_buf, count);
++
++error:
++    return count;
++}
++
++static const struct serdev_device_ops rsinput_rx_ops = {
++    .receive_buf = rsinput_rx,
++};
++
++static void rsinput_rx_watchdog(struct work_struct *work) {
++    struct rsinput_driver *drv =
++        container_of(to_delayed_work(work), struct rsinput_driver, rx_watchdog);
++    uint8_t version_request[] = {DATA_COMMOD_VERSION};
++    unsigned long delay = RSINPUT_WD_DELAY;
++    int error;
++
++    if (drv->wd_probes > 0 && drv->valid_frames != drv->wd_seen_frames) {
++        if (drv->wd_attempts) {
++            dev_info(&drv->serdev->dev,
++                     "link alive after %u recovery attempt(s)\n",
++                     drv->wd_attempts);
++            drv->wd_attempts = 0;
++        }
++        delay = RSINPUT_WD_PATROL;
++    } else if (drv->wd_probes > 0) {
++        drv->wd_attempts++;
++
++        serdev_device_close(drv->serdev);
++
++        if (drv->wd_attempts <= RSINPUT_WD_PORT_CYCLES) {
++            dev_warn(&drv->serdev->dev,
++                     "link silent, cycling port (attempt %u)\n",
++                     drv->wd_attempts);
++        } else {
++            if (drv->wd_attempts <= RSINPUT_WD_PORT_CYCLES + 3)
++                dev_warn(&drv->serdev->dev,
++                         "link still silent, power-cycling MCU (attempt %u)\n",
++                         drv->wd_attempts);
++
++            if (drv->enable_gpio)
++                gpiod_set_value_cansleep(drv->enable_gpio, 0);
++            regulator_disable(drv->vdd);
++            msleep(100);
++            error = regulator_enable(drv->vdd);
++            if (error)
++                dev_err(&drv->serdev->dev,
++                        "Unable to re-enable MCU supply: %d\n", error);
++
++            delay = RSINPUT_WD_MCU_BOOT;
++        }
++
++        error = serdev_device_open(drv->serdev);
++        if (error) {
++            dev_err(&drv->serdev->dev,
++                    "Unable to re-open UART device, retrying\n");
++            schedule_delayed_work(&drv->rx_watchdog, RSINPUT_WD_PATROL);
++            return;
++        }
++        serdev_device_set_baudrate(drv->serdev, 115200);
++        serdev_device_set_flow_control(drv->serdev, false);
++
++        if (drv->wd_attempts > RSINPUT_WD_PORT_CYCLES) {
++            /* Redo power up */
++            error = rsinput_init_commands(drv);
++            if (error < 0)
++                dev_err(&drv->serdev->dev,
++                        "MCU re-init failed: %d\n", error);
++            /* A dead MCU */
++            if (drv->wd_attempts > RSINPUT_WD_PORT_CYCLES + 3)
++                delay = 6 * RSINPUT_WD_PATROL;
++        }
++
++        drv->wd_seen_frames = drv->valid_frames;
++        rsinput_send_command(drv, CMD_COMMOD, version_request,
++                             sizeof(version_request));
++        drv->wd_probes++;
++        schedule_delayed_work(&drv->rx_watchdog, delay);
++        return;
++    }
++
++    drv->wd_seen_frames = drv->valid_frames;
++    rsinput_send_command(drv, CMD_COMMOD, version_request,
++                         sizeof(version_request));
++    drv->wd_probes++;
++    schedule_delayed_work(&drv->rx_watchdog, delay);
++}
++
++static int rsinput_probe(struct serdev_device *serdev) {
++    struct rsinput_driver *drv;
++    u32 gamepad_bus = 0;
++    u32 gamepad_vid = 0;
++    u32 gamepad_pid = 0;
++    u32 gamepad_rev = 0;
++    int error;
++
++    drv = devm_kzalloc(&serdev->dev, sizeof(*drv), GFP_KERNEL);
++    if (!drv)
++    return -ENOMEM;
++
++    drv->invert_x = device_property_present(&serdev->dev, "invert-x");
++    drv->invert_y = device_property_present(&serdev->dev, "invert-y");
++    drv->invert_rx = device_property_present(&serdev->dev, "invert-rx");
++    drv->invert_ry = device_property_present(&serdev->dev, "invert-ry");
++    drv->digital_triggers = device_property_present(&serdev->dev, "digital-triggers");
++
++    {
++        u32 range;
++        if (!device_property_read_u32(&serdev->dev, "axis-range", &range)) {
++            axis_leftx_min  = -range;
++            axis_leftx_max  =  range;
++            axis_lefty_min  = -range;
++            axis_lefty_max  =  range;
++            axis_rightx_min = -range;
++            axis_rightx_max =  range;
++            axis_righty_min = -range;
++            axis_righty_max =  range;
++
++            dev_info(&serdev->dev, "DT axis-range override applied: ±%u\n", range);
++        }
++    }
++
++    {
++        u32 deadzone;
++
++        if (!device_property_read_u32(&serdev->dev, "trigger-left-deadzone", &deadzone)) {
++            trigger_left_deadzone = deadzone;
++            dev_info(&serdev->dev, "DT trigger-left-deadzone override applied: %u\n", deadzone);
++        }
++
++        if (!device_property_read_u32(&serdev->dev, "trigger-right-deadzone", &deadzone)) {
++            trigger_right_deadzone = deadzone;
++            dev_info(&serdev->dev, "DT trigger-right-deadzone override applied: %u\n", deadzone);
++        }
++    }
++
++    drv->vdd = devm_regulator_get(&serdev->dev, "vdd");
++    if (IS_ERR(drv->vdd)) {
++        error = PTR_ERR(drv->vdd);
++        return error;
++    }
++
++    error = regulator_enable(drv->vdd);
++        if (error < 0) {
++        return error;
++    }
++
++    drv->boot_gpio =
++        devm_gpiod_get_optional(&serdev->dev, "boot", GPIOD_OUT_HIGH);
++    if (IS_ERR(drv->boot_gpio)) {
++        error = PTR_ERR(drv->boot_gpio);
++        dev_warn(&serdev->dev, "Unable to get boot gpio: %d\n", error);
++    }
++
++    drv->enable_gpio =
++        devm_gpiod_get_optional(&serdev->dev, "enable", GPIOD_OUT_HIGH);
++    if (IS_ERR(drv->enable_gpio)) {
++        error = PTR_ERR(drv->enable_gpio);
++        dev_warn(&serdev->dev, "Unable to get enable gpio: %d\n", error);
++    }
++
++    drv->reset_gpio =
++        devm_gpiod_get_optional(&serdev->dev, "reset", GPIOD_OUT_HIGH);
++    if (IS_ERR(drv->reset_gpio)) {
++        error = PTR_ERR(drv->reset_gpio);
++        dev_warn(&serdev->dev, "Unable to get reset gpio: %d\n", error);
++    }
++
++    error = serdev_device_open(serdev);
++    if (error)
++        return dev_err_probe(&serdev->dev, error, "Unable to open UART device\n");
++
++    drv->serdev = serdev;
++    drv->sequence_number = 0;
++
++    serdev_device_set_drvdata(serdev, drv);
++
++    error = serdev_device_set_baudrate(serdev, 115200);
++    if (error < 0)
++        return dev_err_probe(&serdev->dev, error, "Failed to set up host baud rate\n");
++
++    serdev_device_set_flow_control(serdev, false);
++
++    drv->input = devm_input_allocate_device(&serdev->dev);
++    if (!drv->input)
++        return -ENOMEM;
++
++    drv->input->phys = "rsinput-gamepad/input0";
++
++    error = device_property_read_string(&serdev->dev, "gamepad-name", &drv->input->name);
++    if (error) {
++        drv->input->name = "RSInput Gamepad";
++    }
++
++    device_property_read_u32(&serdev->dev, "gamepad-bus", &gamepad_bus);
++    device_property_read_u32(&serdev->dev, "gamepad-vid", &gamepad_vid);
++    device_property_read_u32(&serdev->dev, "gamepad-pid", &gamepad_pid);
++    device_property_read_u32(&serdev->dev, "gamepad-rev", &gamepad_rev);
++
++    drv->input->id.bustype = (u16)gamepad_bus;
++    drv->input->id.vendor  = (u16)gamepad_vid;
++    drv->input->id.product = (u16)gamepad_pid;
++    drv->input->id.version = (u16)gamepad_rev;
++
++    __set_bit(EV_KEY, drv->input->evbit);
++    for (int i = 0; i < ARRAY_SIZE(keymap); i++)
++        input_set_capability(drv->input, EV_KEY, keymap[i]);
++
++    __set_bit(EV_ABS, drv->input->evbit);
++    input_set_abs_params(drv->input, ABS_X,
++        INT_SIGN(axis_leftx_min) * ( abs(axis_leftx_min) - axis_leftx_antideadzone ),
++        INT_SIGN(axis_leftx_max) * ( abs(axis_leftx_max) - axis_leftx_antideadzone ),
++        0, 0);
++    input_set_abs_params(drv->input, ABS_Y,
++        INT_SIGN(axis_lefty_min) * ( abs(axis_lefty_min) - axis_lefty_antideadzone ),
++        INT_SIGN(axis_lefty_max) * ( abs(axis_lefty_max) - axis_lefty_antideadzone ),
++        0, 0);
++    input_set_abs_params(drv->input, ABS_RX,
++        INT_SIGN(axis_rightx_min) * ( abs(axis_rightx_min) - axis_rightx_antideadzone ),
++        INT_SIGN(axis_rightx_max) * ( abs(axis_rightx_max) - axis_rightx_antideadzone ),
++        0, 0);
++    input_set_abs_params(drv->input, ABS_RY,
++        INT_SIGN(axis_righty_min) * ( abs(axis_righty_min) - axis_righty_antideadzone ),
++        INT_SIGN(axis_righty_max) * ( abs(axis_righty_max) - axis_righty_antideadzone ),
++        0, 0);
++
++    if (drv->digital_triggers) {
++        input_set_capability(drv->input, EV_KEY, BTN_TL2);
++        input_set_capability(drv->input, EV_KEY, BTN_TR2);
++    } else {
++        input_set_abs_params(drv->input, ABS_Z, 0, trigger_left_max - trigger_left_antideadzone, 0, 30);
++        input_set_abs_params(drv->input, ABS_RZ, 0, trigger_right_max - trigger_right_antideadzone, 0, 30);
++    }
++
++    error = input_register_device(drv->input);
++    if (error)
++        return error;
++
++    serdev_device_set_client_ops(serdev, &rsinput_rx_ops);
++
++    error = rsinput_init_commands(drv);
++    if (error < 0) {
++        serdev_device_close(serdev);
++        return error;
++    }
++
++    INIT_DELAYED_WORK(&drv->rx_watchdog, rsinput_rx_watchdog);
++    schedule_delayed_work(&drv->rx_watchdog, RSINPUT_WD_DELAY);
++
++    return 0;
++}
++
++static void rsinput_remove(struct serdev_device *serdev) {
++    struct rsinput_driver *drv = serdev_device_get_drvdata(serdev);
++
++    cancel_delayed_work_sync(&drv->rx_watchdog);
++    serdev_device_close(serdev);
++    input_unregister_device(drv->input);
++    if (drv->enable_gpio)
++        gpiod_set_value_cansleep(drv->enable_gpio, 0);
++
++    if (drv->reset_gpio)
++        gpiod_set_value_cansleep(drv->reset_gpio, 0);
++
++    regulator_disable(drv->vdd);
++}
++
++static const struct of_device_id rsinput_of_match[] = {
++    { .compatible = "gamepad,rsinput" },
++    { /* sentinel */ }
++};
++MODULE_DEVICE_TABLE(of, rsinput_of_match);
++
++static struct serdev_device_driver rsinput_driver = {
++    .probe = rsinput_probe,
++    .remove = rsinput_remove,
++    .driver = {
++        .name = "rsinput",
++        .of_match_table = rsinput_of_match,
++    },
++};
++
++module_serdev_device_driver(rsinput_driver);
++
++MODULE_LICENSE("GPL");
++MODULE_DESCRIPTION("RSInput Gamepad Driver");
++MODULE_AUTHOR("Teguh Sobirin <teguh@sobir.in>");
+diff --git a/drivers/input/touchscreen/Kconfig b/drivers/input/touchscreen/Kconfig
+index 9b9ae8ac3..9f666587b 100644
+--- a/drivers/input/touchscreen/Kconfig
++++ b/drivers/input/touchscreen/Kconfig
+@@ -383,6 +383,18 @@ config TOUCHSCREEN_FUJITSU
+ 	  To compile this driver as a module, choose M here: the
+ 	  module will be called fujitsu-ts.
+ 
++config TOUCHSCREEN_FOCALTECH_FT8720_SPI
++	tristate "FocalTech FT8720 SPI touchscreen"
++	depends on SPI && OF
++	select INPUT_MT
++	help
++	  Say Y here to enable support for the FocalTech FT8720 TDDI touch
++	  controller connected over SPI (as found on the Redmi 12 5G). The
++	  controller runs from RAM and needs its firmware loaded at probe.
++
++	  To compile this driver as a module, choose M here: the
++	  module will be called focaltech-ft8720-spi.
++
+ config TOUCHSCREEN_GOODIX
+ 	tristate "Goodix I2C touchscreen"
+ 	depends on I2C
+diff --git a/drivers/input/touchscreen/Makefile b/drivers/input/touchscreen/Makefile
+index bfd9de833..753b9966b 100644
+--- a/drivers/input/touchscreen/Makefile
++++ b/drivers/input/touchscreen/Makefile
+@@ -119,3 +119,4 @@ obj-$(CONFIG_TOUCHSCREEN_IQS5XX)	+= iqs5xx.o
+ obj-$(CONFIG_TOUCHSCREEN_IQS7211)	+= iqs7211.o
+ obj-$(CONFIG_TOUCHSCREEN_ZINITIX)	+= zinitix.o
+ obj-$(CONFIG_TOUCHSCREEN_HIMAX_HX83112B)	+= himax_hx83112b.o
++obj-$(CONFIG_TOUCHSCREEN_FOCALTECH_FT8720_SPI)	+= focaltech-ft8720-spi.o
+diff --git a/drivers/input/touchscreen/edt-ft5x06.c b/drivers/input/touchscreen/edt-ft5x06.c
+index d6c3d033b..9210af75a 100644
+--- a/drivers/input/touchscreen/edt-ft5x06.c
++++ b/drivers/input/touchscreen/edt-ft5x06.c
+@@ -34,6 +34,8 @@
+ 
+ #include <linux/unaligned.h>
+ 
++#include <drm/drm_panel.h>
++
+ #define WORK_REGISTER_THRESHOLD		0x00
+ #define WORK_REGISTER_REPORT_RATE	0x08
+ #define WORK_REGISTER_GAIN		0x30
+@@ -119,6 +121,11 @@ struct edt_ft5x06_ts_data {
+ 
+ 	struct regmap *regmap;
+ 
++	struct drm_panel_follower panel_follower;
++	struct work_struct panel_on_work;
++	bool is_panel_follower;
++	bool irq_off;
++
+ #if defined(CONFIG_DEBUG_FS)
+ 	u8 *raw_buffer;
+ 	size_t raw_bufsize;
+@@ -1113,6 +1120,65 @@ static void edt_ft5x06_disable_regulators(void *arg)
+ 	regulator_disable(data->iovcc);
+ }
+ 
++static void edt_ft5x06_panel_on_work(struct work_struct *work)
++{
++	struct edt_ft5x06_ts_data *tsdata =
++		container_of(work, struct edt_ft5x06_ts_data, panel_on_work);
++
++	if (tsdata->reset_gpio) {
++		gpiod_set_value_cansleep(tsdata->reset_gpio, 1);
++		usleep_range(5000, 6000);
++		gpiod_set_value_cansleep(tsdata->reset_gpio, 0);
++		msleep(300);
++	}
++
++	edt_ft5x06_restore_reg_parameters(tsdata);
++
++	if (tsdata->irq_off) {
++		tsdata->irq_off = false;
++		enable_irq(tsdata->client->irq);
++	}
++}
++
++static int edt_ft5x06_panel_enabled(struct drm_panel_follower *follower)
++{
++	struct edt_ft5x06_ts_data *tsdata =
++		container_of(follower, struct edt_ft5x06_ts_data, panel_follower);
++
++	schedule_work(&tsdata->panel_on_work);
++
++	return 0;
++}
++
++static int edt_ft5x06_panel_disabling(struct drm_panel_follower *follower)
++{
++	struct edt_ft5x06_ts_data *tsdata =
++		container_of(follower, struct edt_ft5x06_ts_data, panel_follower);
++
++	cancel_work_sync(&tsdata->panel_on_work);
++
++	if (!tsdata->irq_off) {
++		tsdata->irq_off = true;
++		disable_irq(tsdata->client->irq);
++	}
++
++	gpiod_set_value_cansleep(tsdata->reset_gpio, 1);
++
++	return 0;
++}
++
++static const struct drm_panel_follower_funcs edt_ft5x06_panel_follower_funcs = {
++	.panel_enabled = edt_ft5x06_panel_enabled,
++	.panel_disabling = edt_ft5x06_panel_disabling,
++};
++
++static void edt_ft5x06_cancel_panel_work(void *data)
++{
++	struct edt_ft5x06_ts_data *tsdata = data;
++
++	cancel_work_sync(&tsdata->panel_on_work);
++}
++
+ static int edt_ft5x06_ts_probe(struct i2c_client *client)
+ {
+ 	const struct i2c_device_id *id = i2c_client_get_device_id(client);
+@@ -1325,6 +1391,23 @@ static int edt_ft5x06_ts_probe(struct i2c_client *client)
+ 	if (error)
+ 		return error;
+ 
++	if (drm_is_panel_follower(&client->dev)) {
++		INIT_WORK(&tsdata->panel_on_work, edt_ft5x06_panel_on_work);
++		error = devm_add_action_or_reset(&client->dev,
++						 edt_ft5x06_cancel_panel_work,
++						 tsdata);
++		if (error)
++			return error;
++
++		tsdata->panel_follower.funcs = &edt_ft5x06_panel_follower_funcs;
++		error = devm_drm_panel_add_follower(&client->dev,
++						    &tsdata->panel_follower);
++		if (error)
++			return error;
++
++		tsdata->is_panel_follower = true;
++	}
++
+ 	edt_ft5x06_ts_prepare_debugfs(tsdata);
+ 
+ 	dev_dbg(&client->dev,
+@@ -1350,7 +1433,7 @@ static int edt_ft5x06_ts_suspend(struct device *dev)
+ 	struct gpio_desc *reset_gpio = tsdata->reset_gpio;
+ 	int ret;
+ 
+-	if (device_may_wakeup(dev))
++	if (device_may_wakeup(dev) || tsdata->is_panel_follower)
+ 		return 0;
+ 
+ 	if (tsdata->suspend_mode == EDT_PMODE_NOT_SUPPORTED)
+@@ -1392,7 +1475,7 @@ static int edt_ft5x06_ts_resume(struct device *dev)
+ 	struct edt_ft5x06_ts_data *tsdata = i2c_get_clientdata(client);
+ 	int ret = 0;
+ 
+-	if (device_may_wakeup(dev))
++	if (device_may_wakeup(dev) || tsdata->is_panel_follower)
+ 		return 0;
+ 
+ 	if (tsdata->suspend_mode == EDT_PMODE_NOT_SUPPORTED)
+diff --git a/drivers/input/touchscreen/focaltech-ft8720-spi.c b/drivers/input/touchscreen/focaltech-ft8720-spi.c
+new file mode 100644
+index 000000000..9b344706d
+--- /dev/null
++++ b/drivers/input/touchscreen/focaltech-ft8720-spi.c
+@@ -0,0 +1,433 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * FocalTech FT8720 SPI touchscreen (TDDI) driver.
++ *
++ * Written for the Redmi 12 5G (sky, SM4450). The wire protocol was derived
++ * from SPI traces of the vendor driver (Focaltech V3.4 20211214) running on
++ * the device and from the vendor devicetree; no vendor source code was used.
++ *
++ * Frame format (every command, one SPI transfer, chip select kept low):
++ *   tx: [cmd][ctrl][len_hi][len_lo] + 3 dummy bytes + payload      (write, ctrl 0x00)
++ *   tx: [reg][0xa0][len_hi][len_lo] + zeros; rx: 7 filler bytes, len data
++ *       bytes, CRC16-Kermit (low byte first)                       (read, ctrl 0xa0)
++ *
++ * The controller runs from RAM: after every reset the host must download the
++ * firmware (program RAM at 0x000000, data RAM at 0xd00000) and start it.
++ */
++
++#include <linux/delay.h>
++#include <linux/firmware.h>
++#include <linux/gpio/consumer.h>
++#include <linux/input.h>
++#include <linux/input/mt.h>
++#include <linux/input/touchscreen.h>
++#include <linux/interrupt.h>
++#include <linux/module.h>
++#include <linux/mutex.h>
++#include <linux/of.h>
++#include <linux/slab.h>
++#include <linux/spi/spi.h>
++#include <linux/unaligned.h>
++
++#define FTS_MAX_POINTS		10
++#define FTS_REPORT_REG		0x01
++#define FTS_REPORT_LEN		90
++#define FTS_HDR_LEN		7
++#define FTS_BUF_LEN		4096
++#define FTS_CHUNK		4080
++
++#define FTS_REG_CHIP_ID		0xa3
++#define FTS_REG_POWER		0xa5
++#define FTS_REG_FW_VER		0xa6
++#define FTS_REG_STATE_B5	0xb5
++#define FTS_REG_STATE_B6	0xb6
++
++#define FTS_CMD_BOOT		0x55
++#define FTS_CMD_READ_BOOT_ID	0x90
++#define FTS_CMD_SET_ADDR	0xad
++#define FTS_CMD_WRITE_RAM	0xae
++#define FTS_CMD_ECC_RUN		0xcc
++#define FTS_CMD_ECC_READ	0xcd
++#define FTS_CMD_ECC_STATUS	0xce
++#define FTS_CMD_START_APP	0x08
++
++#define FTS_ECC_DONE		0xa5
++#define FTS_DRAM_BASE		0xd00000
++
++struct fts_ts {
++	struct spi_device *spi;
++	struct input_dev *input;
++	struct gpio_desc *reset;
++	struct touchscreen_properties prop;
++	struct mutex lock;
++	u8 *tx;
++	u8 *rx;
++	u8 fw_version;
++};
++
++static int fts_xfer(struct fts_ts *ts, unsigned int len)
++{
++	struct spi_transfer t = {
++		.tx_buf = ts->tx,
++		.rx_buf = ts->rx,
++		.len = len,
++	};
++
++	return spi_sync_transfer(ts->spi, &t, 1);
++}
++
++/* CRC16-Kermit (reflected poly 0x8408, init 0xffff), as used on the wire */
++static u16 fts_crc(const u8 *p, unsigned int n)
++{
++	u16 crc = 0xffff;
++	unsigned int i;
++	int b;
++
++	for (i = 0; i < n; i++) {
++		crc ^= p[i];
++		for (b = 0; b < 8; b++)
++			crc = (crc >> 1) ^ ((crc & 1) ? 0x8408 : 0);
++	}
++	return crc;
++}
++
++/* Read @n bytes of register @reg into @out, checking the trailing CRC16. */
++static int fts_read(struct fts_ts *ts, u8 reg, u8 *out, unsigned int n)
++{
++	unsigned int tot = FTS_HDR_LEN + n + 2;
++	u16 want, got;
++	int ret;
++
++	if (tot > FTS_BUF_LEN)
++		return -EINVAL;
++
++	memset(ts->tx, 0, tot);
++	ts->tx[0] = reg;
++	ts->tx[1] = 0xa0;
++	ts->tx[2] = n >> 8;
++	ts->tx[3] = n;
++
++	ret = fts_xfer(ts, tot);
++	if (ret)
++		return ret;
++
++	want = fts_crc(ts->rx + FTS_HDR_LEN, n);
++	got = ts->rx[FTS_HDR_LEN + n] | (ts->rx[FTS_HDR_LEN + n + 1] << 8);
++	if (want != got)
++		return -EBADMSG;
++
++	memcpy(out, ts->rx + FTS_HDR_LEN, n);
++	return 0;
++}
++
++static int fts_write(struct fts_ts *ts, u8 cmd, const u8 *data, unsigned int n)
++{
++	unsigned int tot = n ? FTS_HDR_LEN + n : 4;
++
++	if (tot > FTS_BUF_LEN)
++		return -EINVAL;
++
++	memset(ts->tx, 0, tot);
++	ts->tx[0] = cmd;
++	ts->tx[2] = n >> 8;
++	ts->tx[3] = n;
++	if (n)
++		memcpy(ts->tx + FTS_HDR_LEN, data, n);
++
++	return fts_xfer(ts, tot);
++}
++
++static int fts_set_addr(struct fts_ts *ts, u32 addr)
++{
++	u8 p[3] = { addr >> 16, addr >> 8, addr };
++
++	return fts_write(ts, FTS_CMD_SET_ADDR, p, 3);
++}
++
++static void fts_hw_reset(struct fts_ts *ts)
++{
++	gpiod_set_value_cansleep(ts->reset, 1);	/* asserted = pin low */
++	usleep_range(1000, 1500);
++	gpiod_set_value_cansleep(ts->reset, 0);
++	usleep_range(8000, 9000);
++}
++
++static int fts_enter_boot(struct fts_ts *ts)
++{
++	u8 id[2];
++	int i, ret;
++
++	for (i = 0; i < 5; i++) {
++		fts_hw_reset(ts);
++		ret = fts_write(ts, FTS_CMD_BOOT, NULL, 0);
++		if (ret)
++			return ret;
++		msleep(8);
++		ret = fts_read(ts, FTS_CMD_READ_BOOT_ID, id, 2);
++		if (!ret && id[0] == 0x87 && id[1] == 0x20)
++			return 0;
++	}
++
++	dev_err(&ts->spi->dev, "no boot id (last %02x%02x, ret %d)\n",
++		id[0], id[1], ret);
++	return -ENODEV;
++}
++
++/* Write @len bytes of @data to RAM at @base in chunks, then verify ECC. */
++static int fts_load_block(struct fts_ts *ts, u32 base, const u8 *data, u32 len,
++			  const char *what)
++{
++	u32 off, c;
++	u8 b[2], st = 0;
++	u8 p[6];
++	int i, ret;
++
++	for (off = 0; off < len; off += c) {
++		c = min_t(u32, len - off, FTS_CHUNK);
++		ret = fts_set_addr(ts, base + off);
++		if (ret)
++			return ret;
++		usleep_range(200, 400);
++		ret = fts_write(ts, FTS_CMD_WRITE_RAM, data + off, c);
++		if (ret)
++			return ret;
++		usleep_range(1500, 2000);
++	}
++
++	/* the ECC command carries 3 address bytes (0) and the 3-byte length */
++	p[0] = 0; p[1] = 0; p[2] = 0;
++	p[3] = len >> 16; p[4] = len >> 8; p[5] = len;
++	ret = fts_write(ts, FTS_CMD_ECC_RUN, p, 6);
++	if (ret)
++		return ret;
++	usleep_range(2000, 3000);
++
++	for (i = 0; i < 100; i++) {
++		ret = fts_read(ts, FTS_CMD_ECC_STATUS, &st, 1);
++		if (!ret && st == FTS_ECC_DONE)
++			break;
++		usleep_range(1000, 2000);
++	}
++	if (st != FTS_ECC_DONE) {
++		dev_err(&ts->spi->dev, "%s ecc not finished (%02x)\n", what, st);
++		return -ETIMEDOUT;
++	}
++
++	ret = fts_read(ts, FTS_CMD_ECC_READ, b, 2);
++	if (ret)
++		return ret;
++	dev_dbg(&ts->spi->dev, "%s ecc %04x\n", what, get_unaligned_be16(b));
++	return 0;
++}
++
++static int fts_download(struct fts_ts *ts, const struct firmware *fw)
++{
++	const u8 *d = fw->data;
++	u32 pram, dram;
++	int ret;
++
++	if (fw->size < 0x110)
++		return -EINVAL;
++
++	/* lengths (in 16-bit words) with their bitwise inverse next to them */
++	pram = get_unaligned_be16(d + 0x100);
++	if ((pram ^ get_unaligned_be16(d + 0x102)) != 0xffff)
++		return -EINVAL;
++	dram = get_unaligned_be16(d + 0x108);
++	if ((dram ^ get_unaligned_be16(d + 0x10a)) != 0xffff)
++		return -EINVAL;
++	pram *= 2;
++	dram *= 2;
++	if (!pram || pram + dram > fw->size)
++		return -EINVAL;
++
++	ret = fts_enter_boot(ts);
++	if (ret)
++		return ret;
++
++	ret = fts_load_block(ts, 0, d, pram, "pram");
++	if (ret)
++		return ret;
++	ret = fts_load_block(ts, FTS_DRAM_BASE, d + pram, dram, "dram");
++	if (ret)
++		return ret;
++
++	ret = fts_write(ts, FTS_CMD_START_APP, NULL, 0);
++	if (ret)
++		return ret;
++	msleep(30);
++
++	return 0;
++}
++
++static void fts_report(struct fts_ts *ts, const u8 *f)
++{
++	DECLARE_BITMAP(seen, FTS_MAX_POINTS) = { 0 };
++	unsigned int count = f[1] & 0x0f;
++	unsigned int i;
++
++	if (f[1] == 0xff)
++		count = 0;
++
++	for (i = 0; i < count && i < FTS_MAX_POINTS; i++) {
++		const u8 *q = f + 2 + i * 6;
++		unsigned int id = q[2] >> 4;
++		unsigned int ev = q[0] >> 6;
++		unsigned int x = ((q[0] & 0x0f) << 8) | q[1];
++		unsigned int y = ((q[2] & 0x0f) << 8) | q[3];
++
++		if (id >= FTS_MAX_POINTS || ev == 1 || ev == 3)
++			continue;
++
++		input_mt_slot(ts->input, id);
++		input_mt_report_slot_state(ts->input, MT_TOOL_FINGER, true);
++		touchscreen_report_pos(ts->input, &ts->prop, x, y, true);
++		input_report_abs(ts->input, ABS_MT_PRESSURE, q[4]);
++		input_report_abs(ts->input, ABS_MT_TOUCH_MAJOR, q[5] >> 4);
++		__set_bit(id, seen);
++	}
++
++	for (i = 0; i < FTS_MAX_POINTS; i++) {
++		if (test_bit(i, seen))
++			continue;
++		input_mt_slot(ts->input, i);
++		input_mt_report_slot_inactive(ts->input);
++	}
++
++	input_mt_sync_frame(ts->input);
++	input_sync(ts->input);
++}
++
++static irqreturn_t fts_irq(int irq, void *data)
++{
++	struct fts_ts *ts = data;
++	u8 frame[FTS_REPORT_LEN];
++	int ret;
++
++	mutex_lock(&ts->lock);
++	ret = fts_read(ts, FTS_REPORT_REG, frame, FTS_REPORT_LEN);
++	mutex_unlock(&ts->lock);
++	if (ret) {
++		dev_dbg_ratelimited(&ts->spi->dev, "report read failed: %d\n", ret);
++		return IRQ_HANDLED;
++	}
++
++	if ((frame[0] & 0xf0) != 0x90) {
++		dev_dbg_ratelimited(&ts->spi->dev, "unexpected report header %02x\n",
++				    frame[0]);
++		return IRQ_HANDLED;
++	}
++
++	fts_report(ts, frame);
++	return IRQ_HANDLED;
++}
++
++static int fts_probe(struct spi_device *spi)
++{
++	struct device *dev = &spi->dev;
++	const struct firmware *fw;
++	const char *fwname;
++	struct fts_ts *ts;
++	u8 id, b;
++	int ret;
++
++	ts = devm_kzalloc(dev, sizeof(*ts), GFP_KERNEL);
++	if (!ts)
++		return -ENOMEM;
++
++	ts->spi = spi;
++	mutex_init(&ts->lock);
++	ts->tx = devm_kzalloc(dev, FTS_BUF_LEN, GFP_KERNEL);
++	ts->rx = devm_kzalloc(dev, FTS_BUF_LEN, GFP_KERNEL);
++	if (!ts->tx || !ts->rx)
++		return -ENOMEM;
++
++	spi->mode = SPI_MODE_0;
++	spi->bits_per_word = 8;
++	ret = spi_setup(spi);
++	if (ret)
++		return ret;
++
++	ts->reset = devm_gpiod_get(dev, "reset", GPIOD_OUT_HIGH);
++	if (IS_ERR(ts->reset))
++		return dev_err_probe(dev, PTR_ERR(ts->reset), "reset gpio\n");
++
++	ret = device_property_read_string(dev, "firmware-name", &fwname);
++	if (ret)
++		return dev_err_probe(dev, ret, "firmware-name\n");
++
++	ret = request_firmware(&fw, fwname, dev);
++	if (ret)
++		return dev_err_probe(dev, ret, "request %s\n", fwname);
++
++	ret = fts_download(ts, fw);
++	release_firmware(fw);
++	if (ret)
++		return dev_err_probe(dev, ret, "firmware download\n");
++
++	ret = fts_read(ts, FTS_REG_CHIP_ID, &id, 1);
++	if (ret || id != 0x87)
++		return dev_err_probe(dev, ret ? ret : -ENODEV,
++				     "application not running (id %02x)\n", id);
++	ret = fts_read(ts, FTS_REG_FW_VER, &ts->fw_version, 1);
++	if (ret)
++		return ret;
++
++	/* state recovery step seen in the vendor trace after starting the app */
++	fts_read(ts, FTS_REG_STATE_B5, &b, 1);
++	b = 0;
++	fts_write(ts, FTS_REG_STATE_B6, &b, 1);
++
++	ts->input = devm_input_allocate_device(dev);
++	if (!ts->input)
++		return -ENOMEM;
++
++	ts->input->name = "FocalTech FT8720 touchscreen";
++	ts->input->id.bustype = BUS_SPI;
++	input_set_abs_params(ts->input, ABS_MT_POSITION_X, 0, 1079, 0, 0);
++	input_set_abs_params(ts->input, ABS_MT_POSITION_Y, 0, 2459, 0, 0);
++	input_set_abs_params(ts->input, ABS_MT_PRESSURE, 0, 255, 0, 0);
++	input_set_abs_params(ts->input, ABS_MT_TOUCH_MAJOR, 0, 15, 0, 0);
++	touchscreen_parse_properties(ts->input, true, &ts->prop);
++
++	ret = input_mt_init_slots(ts->input, FTS_MAX_POINTS, INPUT_MT_DIRECT);
++	if (ret)
++		return ret;
++
++	ret = devm_request_threaded_irq(dev, spi->irq, NULL, fts_irq,
++					IRQF_ONESHOT, "focaltech-ft8720", ts);
++	if (ret)
++		return dev_err_probe(dev, ret, "irq\n");
++
++	ret = input_register_device(ts->input);
++	if (ret)
++		return ret;
++
++	dev_info(dev, "FT8720 ready, firmware version 0x%02x\n", ts->fw_version);
++	return 0;
++}
++
++static const struct of_device_id fts_of_match[] = {
++	{ .compatible = "focaltech,ft8720-spi" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, fts_of_match);
++
++static const struct spi_device_id fts_spi_id[] = {
++	{ "ft8720-spi" },
++	{ }
++};
++MODULE_DEVICE_TABLE(spi, fts_spi_id);
++
++static struct spi_driver fts_driver = {
++	.driver = {
++		.name = "focaltech-ft8720-spi",
++		.of_match_table = fts_of_match,
++	},
++	.id_table = fts_spi_id,
++	.probe = fts_probe,
++};
++module_spi_driver(fts_driver);
++
++MODULE_DESCRIPTION("FocalTech FT8720 SPI touchscreen driver");
++MODULE_LICENSE("GPL");

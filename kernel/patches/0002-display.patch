@@ -1,0 +1,392 @@
+From: Andy Zhang and contributors (see kernel/third-party/README.md for imported parts)
+Subject: [PATCH 0002/8] MSM display (DPU/MDSS) support for SM4450
+
+DPU catalog for SM4450 (DPU 8.6), DSC, boot-scanout handling, MDSS tweaks.
+Imported from ROCKNIX (0009 etc.), adapted; see kernel/third-party/README.md.
+
+Apply with: git apply (from the root of a Linux 7.3 tree).
+---
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/catalog/dpu_8_6_sm4450.h b/drivers/gpu/drm/msm/disp/dpu1/catalog/dpu_8_6_sm4450.h
+new file mode 100644
+index 000000000..423a1888d
+--- /dev/null
++++ b/drivers/gpu/drm/msm/disp/dpu1/catalog/dpu_8_6_sm4450.h
+@@ -0,0 +1,162 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++/*
++ * Copyright (c) 2026, The Linux Foundation. All rights reserved.
++ *
++ * SM4450 DPU catalog, derived from the vendor devicetree of the
++ * Retroid Pocket Classic and from dpu_8_1_sm8450.h.
++ *
++ */
++
++#ifndef _DPU_8_6_SM4450_H
++#define _DPU_8_6_SM4450_H
++
++static const struct dpu_caps sm4450_dpu_caps = {
++	.max_mixer_width = DEFAULT_DPU_OUTPUT_LINE_WIDTH,
++	.max_mixer_blendstages = 0x5,
++	.has_dim_layer = true,
++	.has_idle_pc = true,
++	.max_linewidth = 4096,
++	.pixel_ram_size = DEFAULT_PIXEL_RAM_SIZE,
++};
++
++static const struct dpu_mdp_cfg sm4450_mdp = {
++	.name = "top_0",
++	.base = 0x0, .len = 0x494,
++	.clk_ctrls = {
++		[DPU_CLK_CTRL_VIG0] = { .reg_off = 0x2ac, .bit_off = 0 },
++		[DPU_CLK_CTRL_DMA0] = { .reg_off = 0x2ac, .bit_off = 8 },
++	},
++};
++
++static const struct dpu_ctl_cfg sm4450_ctl[] = {
++	{
++		.name = "ctl_0", .id = CTL_0,
++		.base = 0x15000, .len = 0x204,
++		.intr_start = DPU_IRQ_IDX(MDP_SSPP_TOP0_INTR2, 9),
++	},
++};
++
++static const struct dpu_sspp_cfg sm4450_sspp[] = {
++	{
++		.name = "sspp_0", .id = SSPP_VIG0,
++		.base = 0x4000, .len = 0x32c,
++		.features = VIG_SC7280_MASK_SDMA,
++		.sblk = &dpu_vig_sblk_qseed3_3_1_rot_v201,
++		.xin_id = 0,
++		.type = SSPP_TYPE_VIG,
++		.clk_ctrl = DPU_CLK_CTRL_VIG0,
++	}, {
++		.name = "sspp_8", .id = SSPP_DMA0,
++		.base = 0x24000, .len = 0x32c,
++		.features = DMA_SDM845_MASK_SDMA,
++		.sblk = &dpu_dma_sblk,
++		.xin_id = 1,
++		.type = SSPP_TYPE_DMA,
++		.clk_ctrl = DPU_CLK_CTRL_DMA0,
++	},
++};
++
++static const struct dpu_lm_cfg sm4450_lm[] = {
++	{
++		.name = "lm_0", .id = LM_0,
++		.base = 0x44000, .len = 0x400,
++		.sblk = &sm4450_lm_sblk,
++		.pingpong = PINGPONG_0,
++		.dspp = DSPP_0,
++	},
++};
++
++static const struct dpu_dspp_cfg sm4450_dspp[] = {
++	{
++		.name = "dspp_0", .id = DSPP_0,
++		.base = 0x54000, .len = 0x1800,
++		.sblk = &sdm845_dspp_sblk,
++	},
++};
++
++static const struct dpu_pingpong_cfg sm4450_pp[] = {
++	{
++		.name = "pingpong_0", .id = PINGPONG_0,
++		.base = 0x69000, .len = 0,
++		.sblk = &sc7280_pp_sblk,
++		.intr_done = DPU_IRQ_IDX(MDP_SSPP_TOP0_INTR, 8),
++	},
++};
++
++static const struct dpu_dsc_cfg sm4450_dsc[] = {
++	{
++		.name = "dce_0_0", .id = DSC_0,
++		.base = 0x80000, .len = 0x4,
++		.sblk = &dsc_sblk_0,
++	},
++};
++
++static const struct dpu_intf_cfg sm4450_intf[] = {
++	{
++		.name = "intf_1", .id = INTF_1,
++		.base = 0x35000, .len = 0x2c4,
++		.type = INTF_DSI,
++		.controller_id = MSM_DSI_CONTROLLER_0,
++		.prog_fetch_lines_worst_case = 24,
++		.intr_underrun = DPU_IRQ_IDX(MDP_SSPP_TOP0_INTR, 26),
++		.intr_vsync = DPU_IRQ_IDX(MDP_SSPP_TOP0_INTR, 27),
++		.intr_tear_rd_ptr = DPU_IRQ_IDX(MDP_INTF1_TEAR_INTR, 2),
++	},
++};
++
++static const struct dpu_perf_cfg sm4450_perf_data = {
++	.max_bw_low = 4200000,
++	.max_bw_high = 7000000,
++	.min_core_ib = 2500000,
++	.min_llcc_ib = 0,
++	.min_dram_ib = 1600000,
++	.min_prefill_lines = 40,
++	.danger_lut_tbl = {0x3fffff, 0x3fffff, 0x0},
++	.safe_lut_tbl = {0xf800, 0xf800, 0x0},
++	.qos_lut_tbl = {
++		{.nentry = ARRAY_SIZE(sm4450_qos_linear_macrotile),
++		.entries = sm4450_qos_linear_macrotile
++		},
++		{.nentry = ARRAY_SIZE(sm4450_qos_linear_macrotile),
++		.entries = sm4450_qos_linear_macrotile
++		},
++		{.nentry = ARRAY_SIZE(sc7180_qos_nrt),
++		.entries = sc7180_qos_nrt
++		},
++	},
++	.cdp_cfg = {
++		{.rd_enable = 1, .wr_enable = 1},
++		{.rd_enable = 1, .wr_enable = 0}
++	},
++	.clk_inefficiency_factor = 105,
++	.bw_inefficiency_factor = 120,
++};
++
++static const struct dpu_mdss_version sm4450_mdss_ver = {
++	.core_major_ver = 8,
++	.core_minor_ver = 6,
++};
++
++const struct dpu_mdss_cfg dpu_sm4450_cfg = {
++	.mdss_ver = &sm4450_mdss_ver,
++	.caps = &sm4450_dpu_caps,
++	.mdp = &sm4450_mdp,
++	.ctl_count = ARRAY_SIZE(sm4450_ctl),
++	.ctl = sm4450_ctl,
++	.sspp_count = ARRAY_SIZE(sm4450_sspp),
++	.sspp = sm4450_sspp,
++	.dspp_count = ARRAY_SIZE(sm4450_dspp),
++	.dspp = sm4450_dspp,
++	.mixer_count = ARRAY_SIZE(sm4450_lm),
++	.mixer = sm4450_lm,
++	.pingpong_count = ARRAY_SIZE(sm4450_pp),
++	.pingpong = sm4450_pp,
++	.dsc_count = ARRAY_SIZE(sm4450_dsc),
++	.dsc = sm4450_dsc,
++	.intf_count = ARRAY_SIZE(sm4450_intf),
++	.intf = sm4450_intf,
++	.vbif = &sdm845_vbif,
++	.perf = &sm4450_perf_data,
++};
++
++#endif
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_catalog.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_catalog.c
+index 9a993cdfa..17deb0a10 100644
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_catalog.c
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_catalog.c
+@@ -190,6 +190,23 @@ static const u32 rotation_v2_formats[] = {
+ 	/* TODO add formats after validation */
+ };
+ 
++static const u32 rotation_v201_formats[] = {
++	DRM_FORMAT_NV12,
++	DRM_FORMAT_P010,
++	DRM_FORMAT_ARGB8888,
++	DRM_FORMAT_ABGR8888,
++	DRM_FORMAT_RGBA8888,
++	DRM_FORMAT_BGRA8888,
++	DRM_FORMAT_XRGB8888,
++	DRM_FORMAT_XBGR8888,
++	DRM_FORMAT_RGBX8888,
++	DRM_FORMAT_BGRX8888,
++	DRM_FORMAT_ARGB2101010,
++	DRM_FORMAT_ABGR2101010,
++	DRM_FORMAT_XRGB2101010,
++	DRM_FORMAT_XBGR2101010,
++};
++
+ static const u32 wb2_formats_rgb_yuv[] = {
+ 	DRM_FORMAT_RGB565,
+ 	DRM_FORMAT_BGR565,
+@@ -319,6 +336,12 @@ static const struct dpu_rotation_cfg dpu_rot_sc7280_cfg_v2 = {
+ 	.rot_format_list = rotation_v2_formats,
+ };
+ 
++static const struct dpu_rotation_cfg dpu_rot_sm4450_cfg_v201 = {
++	.rot_maxheight = 1200,
++	.rot_num_formats = ARRAY_SIZE(rotation_v201_formats),
++	.rot_format_list = rotation_v201_formats,
++};
++
+ static const struct dpu_sspp_sub_blks dpu_vig_sblk_qseed2 =
+ 				_VIG_SBLK_QSEED2();
+ 
+@@ -344,6 +367,10 @@ static const struct dpu_sspp_sub_blks dpu_vig_sblk_qseed3_3_0_rot_v2 =
+ 			_VIG_SBLK_ROT(SSPP_SCALER_VER(3, 0),
+ 				      &dpu_rot_sc7280_cfg_v2);
+ 
++static const struct dpu_sspp_sub_blks dpu_vig_sblk_qseed3_3_1_rot_v201 =
++			_VIG_SBLK_ROT(SSPP_SCALER_VER(3, 1),
++				      &dpu_rot_sm4450_cfg_v201);
++
+ static const struct dpu_sspp_sub_blks dpu_vig_sblk_qseed3_3_1 =
+ 				_VIG_SBLK(SSPP_SCALER_VER(3, 1));
+ 
+@@ -392,6 +419,13 @@ static const struct dpu_lm_sub_blks sc7180_lm_sblk = {
+ 	},
+ };
+ 
++static const struct dpu_lm_sub_blks sm4450_lm_sblk = {
++	.maxblendstages = 5, /* excluding base layer */
++	.blendstage_base = { /* offsets relative to mixer base */
++		0x20, 0x38, 0x50, 0x68, 0x80
++	},
++};
++
+ static const struct dpu_lm_sub_blks sm8750_lm_sblk = {
+ 	.maxblendstages = 11, /* excluding base layer */
+ 	.blendstage_base = { /* offsets relative to mixer base */
+@@ -752,6 +786,10 @@ static const struct dpu_qos_lut_entry sc7180_qos_nrt[] = {
+ 	{.fl = 0, .lut = 0x0},
+ };
+ 
++static const struct dpu_qos_lut_entry sm4450_qos_linear_macrotile[] = {
++	{.fl = 0, .lut = 0x0122334445566777},
++};
++
+ /*************************************************************
+  * Hardware catalog
+  *************************************************************/
+@@ -787,6 +825,7 @@ static const struct dpu_qos_lut_entry sc7180_qos_nrt[] = {
+ #include "catalog/dpu_8_0_sc8280xp.h"
+ #include "catalog/dpu_8_1_sm8450.h"
+ #include "catalog/dpu_8_4_sa8775p.h"
++#include "catalog/dpu_8_6_sm4450.h"
+ 
+ #include "catalog/dpu_9_0_sm8550.h"
+ #include "catalog/dpu_9_1_sar2130p.h"
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_catalog.h b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_catalog.h
+index f45faf873..545bd518d 100644
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_catalog.h
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_catalog.h
+@@ -793,6 +793,7 @@ extern const struct dpu_mdss_cfg dpu_sc7280_cfg;
+ extern const struct dpu_mdss_cfg dpu_sc8280xp_cfg;
+ extern const struct dpu_mdss_cfg dpu_sm8450_cfg;
+ extern const struct dpu_mdss_cfg dpu_sa8775p_cfg;
++extern const struct dpu_mdss_cfg dpu_sm4450_cfg;
+ extern const struct dpu_mdss_cfg dpu_sm8550_cfg;
+ extern const struct dpu_mdss_cfg dpu_sm8650_cfg;
+ extern const struct dpu_mdss_cfg dpu_sm8750_cfg;
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_dsc_1_2.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_dsc_1_2.c
+index b3395e9c3..f763bcece 100644
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_dsc_1_2.c
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_dsc_1_2.c
+@@ -4,6 +4,7 @@
+  * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved
+  */
+ 
++#include <linux/of.h>
+ #include <drm/drm_managed.h>
+ 
+ #include <drm/display/drm_dsc_helper.h>
+@@ -65,6 +66,13 @@ static int _dsc_calc_output_buf_max_addr(struct dpu_hw_dsc *hw_dsc, int num_soft
+ 	if (hw_dsc->caps->features & BIT(DPU_DSC_NATIVE_42x_EN))
+ 		max_addr /= 2;
+ 
++	/*
++	 * SM4450's DSC block has only 600 bytes of rate buffer, not 2400 (sky-linux
++	 * 0003, root cause of slice-shaped noise). TECH_DEBT: move into the catalog.
++	 */
++	if (of_machine_is_compatible("qcom,sm4450"))
++		max_addr = 600 / num_softslice;
++
+ 	return max_addr - 1;
+ };
+ 
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c
+index da3556eb6..69ed0f0cf 100644
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c
+@@ -10,6 +10,7 @@
+ #define pr_fmt(fmt)	"[drm:%s:%d] " fmt, __func__, __LINE__
+ 
+ #include <linux/debugfs.h>
++#include <linux/delay.h>
+ #include <linux/dma-buf.h>
+ #include <linux/of_irq.h>
+ #include <linux/pm_opp.h>
+@@ -31,6 +32,7 @@
+ #include "dpu_crtc.h"
+ #include "dpu_encoder.h"
+ #include "dpu_formats.h"
++#include "dpu_hw_intf.h"
+ #include "dpu_hw_vbif.h"
+ #include "dpu_kms.h"
+ #include "dpu_plane.h"
+@@ -1135,6 +1137,43 @@ unsigned long dpu_kms_get_clk_rate(struct dpu_kms *dpu_kms, char *clock_name)
+ 
+ #define	DPU_PERF_DEFAULT_MAX_CORE_CLK_RATE	412500000
+ 
++/*
++ * The bootloader may leave a timing engine running to keep its splash on screen.
++ */
++static void dpu_kms_stop_boot_scanout(struct dpu_kms *dpu_kms)
++{
++	struct dpu_hw_intf_status status;
++	struct dpu_hw_intf *intf;
++	int i, j;
++
++	for (i = INTF_0; i < INTF_MAX; i++) {
++		intf = dpu_rm_get_intf(&dpu_kms->rm, i);
++		if (!intf || !intf->ops.get_status || !intf->ops.enable_timing)
++			continue;
++
++		intf->ops.get_status(intf, &status);
++		if (!status.is_en)
++			continue;
++
++		intf->ops.enable_timing(intf, 0);
++
++		if (intf->mdss_ver->core_major_ver < 5) {
++			/* no INTF_STATUS before DPU 5.0, wait out a frame */
++			msleep(20);
++			continue;
++		}
++
++		for (j = 0; j < 50; j++) {
++			intf->ops.get_status(intf, &status);
++			if (!status.is_en)
++				break;
++			usleep_range(1000, 2000);
++		}
++		if (status.is_en)
++			DPU_ERROR("INTF_%d: boot scanout did not stop\n", i - INTF_0);
++	}
++}
++
+ static int dpu_kms_hw_init(struct msm_kms *kms)
+ {
+ 	struct dpu_kms *dpu_kms;
+@@ -1203,6 +1242,8 @@ static int dpu_kms_hw_init(struct msm_kms *kms)
+ 		goto err_pm_put;
+ 	}
+ 
++	dpu_kms_stop_boot_scanout(dpu_kms);
++
+ 	dpu_kms->hw_mdp = dpu_hw_mdptop_init(dev,
+ 					     dpu_kms->catalog->mdp,
+ 					     dpu_kms->mmio,
+@@ -1500,6 +1541,7 @@ static const struct of_device_id dpu_dt_match[] = {
+ 	{ .compatible = "qcom,sc7280-dpu", .data = &dpu_sc7280_cfg, },
+ 	{ .compatible = "qcom,sc8180x-dpu", .data = &dpu_sc8180x_cfg, },
+ 	{ .compatible = "qcom,sc8280xp-dpu", .data = &dpu_sc8280xp_cfg, },
++	{ .compatible = "qcom,sm4450-dpu", .data = &dpu_sm4450_cfg, },
+ 	{ .compatible = "qcom,sm6115-dpu", .data = &dpu_sm6115_cfg, },
+ 	{ .compatible = "qcom,sm6125-dpu", .data = &dpu_sm6125_cfg, },
+ 	{ .compatible = "qcom,sm6150-dpu", .data = &dpu_sm6150_cfg, },
+diff --git a/drivers/gpu/drm/msm/msm_mdss.c b/drivers/gpu/drm/msm/msm_mdss.c
+index 9087c4b29..53655d7c7 100644
+--- a/drivers/gpu/drm/msm/msm_mdss.c
++++ b/drivers/gpu/drm/msm/msm_mdss.c
+@@ -541,6 +541,7 @@ static const struct of_device_id mdss_dt_match[] = {
+ 	{ .compatible = "qcom,sc7280-mdss", .data = &data_74k },
+ 	{ .compatible = "qcom,sc8180x-mdss", .data = &data_76k8 },
+ 	{ .compatible = "qcom,sc8280xp-mdss", .data = &data_76k8 },
++	{ .compatible = "qcom,sm4450-mdss", .data = &data_74k },
+ 	{ .compatible = "qcom,sm6115-mdss", .data = &data_76k8 },
+ 	{ .compatible = "qcom,sm6125-mdss", .data = &data_76k8 },
+ 	{ .compatible = "qcom,sm6150-mdss", .data = &data_76k8 },

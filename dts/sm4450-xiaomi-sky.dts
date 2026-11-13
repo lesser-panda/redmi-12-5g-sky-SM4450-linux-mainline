@@ -1,0 +1,2085 @@
+// SPDX-License-Identifier: BSD-3-Clause
+/*
+ * Redmi 12 5G (sky), milestone 3: m2 + SMMU + display stack (MDSS/DPU/DSI/PHY) + sky panel. SoC nodes from ROCKNIX (BSD-3-Clause).
+ * Own file (no third-party board DTS). Values come from this device:
+ *   RAM bank   : /proc/iomem 'System RAM' c0000000-e05fffff (Android's view, no reserved children)
+ *   framebuffer: runtime DT cont_splash_region 0xb8000000 size 0x2b00000 (43 MiB);
+ *                stride 0x10E0 (=1080*4) is measured by sky-linux shim on another unit (unverified here)
+ * Evidence: private/runtime-DATE/iomem-full.txt and runtime.dts (not committed).
+ */
+
+/dts-v1/;
+
+#include "sm4450.dtsi"
+#include <dt-bindings/interconnect/qcom,icc.h>
+#include <dt-bindings/interconnect/qcom,sm4450-rpmh.h>
+#include <dt-bindings/dma/qcom-gpi.h>
+#include <dt-bindings/sound/qcom,q6dsp-lpass-ports.h>
+#include <dt-bindings/soc/qcom,gpr.h>
+#include <dt-bindings/spmi/spmi.h>
+#include <dt-bindings/input/linux-event-codes.h>
+#include <dt-bindings/input/input.h>
+#include <dt-bindings/mailbox/qcom-ipcc.h>
+#include <dt-bindings/regulator/qcom,rpmh-regulator.h>
+#include <dt-bindings/clock/qcom,rpmh.h>
+#include <dt-bindings/clock/qcom,sm4450-gcc.h>
+#include <dt-bindings/power/qcom,rpmhpd.h>
+#include <dt-bindings/clock/qcom,dsi-phy-28nm.h>
+
+/delete-node/ &{/memory@a0000000};
+
+/ {
+	model = "Xiaomi Redmi 12 5G (sky) m3";
+	compatible = "xiaomi,sky", "qcom,sm4450";
+
+	/* runtime DT /memory banks (8008 MiB); no-map firmware carveouts are reserved below */
+	memory@80000000 {
+		device_type = "memory";
+		reg = <0x0 0x80000000 0x0 0x68e00000>,
+		      <0x0 0xf1300000 0x0 0x0ed00000>,
+		      <0x8 0x00000000 0x0 0x3fc00000>,
+		      <0x8 0x40000000 0x0 0x40000000>,
+		      <0x8 0x80000000 0x0 0x3b300000>,
+		      <0x8 0xbb900000 0x0 0x01e00000>,
+		      <0x8 0xc0000000 0x0 0xc0000000>;
+	};
+
+	reserved-memory {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		ranges;
+
+		/* same region and layout as Android's ramoops (runtime DT), so Android can read our console log */
+		ramoops@97700000 {
+			compatible = "ramoops";
+			reg = <0x0 0x97700000 0x0 0x200000>;
+			pmsg-size = <0x100000>;
+			record-size = <0x40000>;
+			console-size = <0x80000>;
+		};
+	};
+
+	chosen {
+		bootargs = "console=tty0 fbcon=nodefer nokaslr panic=15 clk_ignore_unused pd_ignore_unused arm-smmu.disable_bypass=0 fbcon=font:TER16x32 loglevel=7 ignore_loglevel log_buf_len=4M ";
+
+		#address-cells = <2>;
+		#size-cells = <2>;
+		ranges;
+
+		framebuffer@b8000000 {
+			compatible = "simple-framebuffer";
+			reg = <0x0 0xb8000000 0x0 0x2b00000>;
+			width = <1080>;
+			height = <2460>;
+			stride = <4320>;
+			format = "a8r8g8b8";
+		};
+	};
+};
+
+
+/*
+ * USB: register layout, interrupts (SPI 133, PDC 14/15/17), SMMU stream 0x540, dma-coherent and
+ * maximum-speed=high-speed match this phone's runtime DT. Clocks/resets/GDSC/PHY compatible follow
+ * the ROCKNIX SM4450 board files (community, not verified on this unit). Deliberately omitted for
+ * now: regulator supplies (left as the bootloader set them), interconnect votes, iommus (assumed
+ * bypass as left by ABL's own USB use) and the QMP SS PHY (USB 2.0 only).
+ */
+&soc {
+	usb_1_hsphy: phy@88e3000 {
+		compatible = "qcom,sm4450-usb-hs-phy", "qcom,usb-snps-hs-7nm-phy";
+		reg = <0x0 0x088e3000 0x0 0x120>;
+		#phy-cells = <0>;
+		clocks = <&gcc GCC_EUSB3_0_CLKREF_EN>;
+		clock-names = "ref";
+		resets = <&gcc GCC_QUSB2PHY_PRIM_BCR>;
+		vdda-pll-supply = <&vreg_l5b_0p88>;
+		vdda33-supply = <&vreg_l25b_3p3>;
+		vdda18-supply = <&vreg_l23b_1p8>;
+	};
+
+	usb_1: usb@a600000 {
+		compatible = "qcom,sm4450-dwc3", "qcom,snps-dwc3";
+		reg = <0x0 0x0a600000 0x0 0xfc100>;
+
+		clocks = <&gcc GCC_CFG_NOC_USB3_PRIM_AXI_CLK>,
+			 <&gcc GCC_USB30_PRIM_MASTER_CLK>,
+			 <&gcc GCC_AGGRE_USB3_PRIM_AXI_CLK>,
+			 <&gcc GCC_USB30_PRIM_SLEEP_CLK>,
+			 <&gcc GCC_USB30_PRIM_MOCK_UTMI_CLK>,
+			 <&gcc GCC_USB3_0_CLKREF_EN>;
+		clock-names = "cfg_noc", "core", "iface", "sleep", "mock_utmi", "xo";
+
+		assigned-clocks = <&gcc GCC_USB30_PRIM_MOCK_UTMI_CLK>,
+				  <&gcc GCC_USB30_PRIM_MASTER_CLK>;
+		assigned-clock-rates = <19200000>, <133333333>;
+
+		interrupts-extended = <&intc GIC_SPI 133 IRQ_TYPE_LEVEL_HIGH>,
+				      <&pdc 14 IRQ_TYPE_EDGE_BOTH>,
+				      <&pdc 15 IRQ_TYPE_EDGE_BOTH>,
+				      <&pdc 17 IRQ_TYPE_LEVEL_HIGH>;
+		interrupt-names = "dwc_usb3", "dp_hs_phy_irq", "dm_hs_phy_irq", "ss_phy_irq";
+
+		power-domains = <&gcc GCC_USB30_PRIM_GDSC>;
+		resets = <&gcc GCC_USB30_PRIM_BCR>;
+
+		/* no dma-coherent: Android's DT has it with a translating SMMU; here the SMMU is in ABL's bypass state, so DMA is not coherent (E005 run 2: host sees HS attach but ep0 never answers) */
+		/* no SS PHY: take the pipe clock from UTMI (sky-linux does the same; E005 run 1 showed 'not attached' without it) */
+		qcom,select-utmi-as-pipe-clk;
+		snps,dis_u2_susphy_quirk;
+		snps,dis_enblslpm_quirk;
+		snps,dis_u3_susphy_quirk;
+
+		phys = <&usb_1_hsphy>;
+		phy-names = "usb2-phy";
+		iommus = <&apps_smmu 0x540 0x0>;
+		dr_mode = "otg";
+		maximum-speed = "high-speed";
+		usb-role-switch;
+
+		ports {
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			port@0 {
+				reg = <0>;
+
+				usb_1_dwc3_hs: endpoint {
+					remote-endpoint = <&pmic_glink_hs_in>;
+				};
+			};
+		};
+	};
+};
+
+/*
+ * panel rails (runtime DT display_gpio_regulator@0/1/2). vddio and extvdd are on the PM7250B GPIO
+ * controller (gpio 11/12, phandle 0x511 in the runtime DT), NOT on TLMM; no SPMI/PMIC node exists
+ * here yet, so they are modelled as plain always-on rails left powered by ABL (TECH_DEBT).
+ * TLMM gpio 10/11 are the SE1 I2C lines used by the backlight. avdd is TLMM gpio127.
+ */
+/ {
+	vreg_panel_vddio: regulator-panel-vddio {
+		compatible = "regulator-fixed";
+		regulator-name = "display_panel_vddio";
+		regulator-min-microvolt = <1800000>;
+		regulator-max-microvolt = <1800000>;
+		regulator-boot-on;
+		regulator-always-on;
+	};
+
+	vreg_panel_extvdd: regulator-panel-extvdd {
+		compatible = "regulator-fixed";
+		regulator-name = "display_panel_extvdd";
+		regulator-min-microvolt = <1200000>;
+		regulator-max-microvolt = <1200000>;
+		regulator-boot-on;
+		regulator-always-on;
+	};
+
+	vreg_panel_avdd: regulator-panel-avdd {
+		compatible = "regulator-fixed";
+		regulator-name = "display_panel_avdd";
+		regulator-min-microvolt = <5500000>;
+		regulator-max-microvolt = <5500000>;
+		gpio = <&tlmm 127 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		regulator-boot-on;
+		regulator-always-on;
+		startup-delay-us = <233>;
+	};
+
+	/* SMEM: qcom_ubwc_config_get_data() defers until smem is available (E006 run 3: mdss 'reason unknown'); region/hwlock from runtime DT */
+	smem {
+		compatible = "qcom,smem";
+		memory-region = <&smem_mem>;
+		hwlocks = <&tcsr_mutex 3>;
+	};
+
+	/* SMC firmware interface: the arm-smmu driver defers until qcom_scm is ready (E006 run 1); runtime DT has qcom_scm under /firmware */
+	firmware {
+		scm: scm {
+			compatible = "qcom,scm-sm4450", "qcom,scm";
+		};
+	};
+};
+
+&{/reserved-memory} {
+	smem_mem: smem@80900000 {
+		reg = <0x0 0x80900000 0x0 0x200000>;
+		no-map;
+	};
+};
+
+/* DISPCC parents incl. the DSI PLL outputs (ROCKNIX board file) */
+/* KTD3136 backlight on QUP wrapper 0 SE1 I2C (runtime DT qupv3_se1_i2c @984000, SDA gpio10, SCL gpio11, ktd @0x36).
+ * HWEN is PM6450 gpio6 (no SPMI node yet): left as ABL set it. */
+&tlmm {
+	qup_i2c1_default: qup-i2c1-default-state {
+		pins = "gpio10", "gpio11";
+		function = "qup0_se1";
+		drive-strength = <2>;
+		bias-pull-up;
+	};
+};
+
+&soc {
+	qupv3_id_w0: geniqup@9c0000 {
+		compatible = "qcom,geni-se-qup";
+		reg = <0x0 0x009c0000 0x0 0x2000>;
+		ranges;
+		clocks = <&gcc GCC_QUPV3_WRAP_0_M_AHB_CLK>,
+			 <&gcc GCC_QUPV3_WRAP_0_S_AHB_CLK>;
+		clock-names = "m-ahb", "s-ahb";
+		#address-cells = <2>;
+		#size-cells = <2>;
+
+		i2c1: i2c@984000 {
+			compatible = "qcom,geni-i2c";
+			reg = <0x0 0x00984000 0x0 0x4000>;
+			interrupts = <GIC_SPI 602 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&gcc GCC_QUPV3_WRAP0_S1_CLK>;
+			clock-names = "se";
+			pinctrl-0 = <&qup_i2c1_default>;
+			pinctrl-names = "default";
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			backlight@36 {
+				compatible = "ktd,ktd3136";
+				reg = <0x36>;
+				default-brightness = <1024>;
+			};
+
+			spk_amp: amplifier@34 {
+				compatible = "foursemi,fs1599";
+				reg = <0x34>;
+				sound-name-prefix = "Spk Amp";
+				firmware-name = "foursemi/fs1599.fsm";
+				foursemi,scene = <6>;
+			};
+		};
+	};
+};
+
+&dispcc {
+	clocks = <&rpmhcc RPMH_CXO_CLK>,
+		 <&rpmhcc RPMH_CXO_CLK_A>,
+		 <&gcc GCC_DISP_AHB_CLK>,
+		 <&sleep_clk>,
+		 <&mdss_dsi0_phy DSI_BYTE_PLL_CLK>,
+		 <&mdss_dsi0_phy DSI_PIXEL_PLL_CLK>;
+	power-domains = <&rpmhpd RPMHPD_MX>;
+};
+
+&soc {
+	/* SoC display + IOMMU nodes below are from ROCKNIX sm4450-anbernic-rg55g1.dts (BSD-3-Clause) */
+	apps_smmu: iommu@15000000 {
+			compatible = "qcom,sm4450-smmu-500", "qcom,smmu-500",
+				     "arm,mmu-500";
+			reg = <0x0 0x15000000 0x0 0x100000>;
+			#iommu-cells = <2>;
+			#global-interrupts = <1>;
+			dma-coherent;
+	
+			interrupts = <GIC_SPI 65 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 94 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 95 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 96 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 670 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 671 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 97 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 98 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 99 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 100 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 101 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 102 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 103 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 104 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 105 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 106 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 107 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 108 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 109 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 110 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 111 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 112 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 113 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 114 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 115 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 116 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 117 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 118 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 181 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 182 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 183 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 184 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 185 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 186 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 187 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 188 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 189 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 190 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 191 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 192 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 315 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 316 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 317 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 318 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 319 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 320 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 321 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 322 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 323 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 324 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 325 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 326 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 327 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 328 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 329 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 330 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 331 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 332 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 333 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 334 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 335 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 336 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 337 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 338 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 339 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 340 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 341 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 342 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 343 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 344 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 345 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 395 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 396 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 397 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 398 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 399 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 400 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 401 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 402 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 403 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 404 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 405 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 406 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 407 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 408 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 409 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 418 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 419 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 412 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 421 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 707 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 423 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 424 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 425 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 690 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 691 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 692 IRQ_TYPE_LEVEL_HIGH>;
+		};
+
+	mdss: display-subsystem@ae00000 {
+			compatible = "qcom,sm4450-mdss";
+			reg = <0x0 0x0ae00000 0x0 0x1000>;
+			reg-names = "mdss";
+	
+			interrupts = <GIC_SPI 83 IRQ_TYPE_LEVEL_HIGH>;
+			interrupt-controller;
+			#interrupt-cells = <1>;
+	
+			clocks = <&dispcc DISP_CC_MDSS_AHB_CLK>,
+				 <&gcc GCC_DISP_HF_AXI_CLK>,
+				 <&dispcc DISP_CC_MDSS_MDP_CLK>;
+			clock-names = "iface", "bus", "core";
+	
+			power-domains = <&dispcc DISP_CC_MDSS_CORE_GDSC>;
+	
+	
+			iommus = <&apps_smmu 0x800 0x402>;
+	
+			#address-cells = <2>;
+			#size-cells = <2>;
+			ranges;
+	
+	
+			mdss_mdp: display-controller@ae01000 {
+				compatible = "qcom,sm4450-dpu";
+				reg = <0x0 0x0ae01000 0x0 0x8f000>,
+				      <0x0 0x0aeb0000 0x0 0x2008>;
+				reg-names = "mdp", "vbif";
+	
+				clocks = <&gcc GCC_DISP_HF_AXI_CLK>,
+					 <&dispcc DISP_CC_MDSS_AHB_CLK>,
+					 <&dispcc DISP_CC_MDSS_MDP_LUT_CLK>,
+					 <&dispcc DISP_CC_MDSS_MDP_CLK>,
+					 <&dispcc DISP_CC_MDSS_VSYNC_CLK>;
+				clock-names = "bus",
+					      "iface",
+					      "lut",
+					      "core",
+					      "vsync";
+	
+				assigned-clocks = <&dispcc DISP_CC_MDSS_VSYNC_CLK>;
+				assigned-clock-rates = <19200000>;
+	
+				operating-points-v2 = <&mdp_opp_table>;
+				power-domains = <&rpmhpd RPMHPD_CX>;
+	
+				interrupt-parent = <&mdss>;
+				interrupts = <0>;
+	
+				ports {
+					#address-cells = <1>;
+					#size-cells = <0>;
+	
+					port@0 {
+						reg = <0>;
+						dpu_intf1_out: endpoint {
+							remote-endpoint = <&mdss_dsi0_in>;
+						};
+					};
+				};
+	
+				/* TODO Verify */
+				mdp_opp_table: opp-table {
+					compatible = "operating-points-v2";
+	
+					opp-200000000 {
+						opp-hz = /bits/ 64 <200000000>;
+						required-opps = <&rpmhpd_opp_low_svs>;
+					};
+	
+					opp-325000000 {
+						opp-hz = /bits/ 64 <325000000>;
+						required-opps = <&rpmhpd_opp_svs>;
+					};
+	
+					opp-380000000 {
+						opp-hz = /bits/ 64 <380000000>;
+						required-opps = <&rpmhpd_opp_svs_l1>;
+					};
+	
+					opp-506000000 {
+						opp-hz = /bits/ 64 <506000000>;
+						required-opps = <&rpmhpd_opp_nom>;
+					};
+	
+					opp-608000000 {
+						opp-hz = /bits/ 64 <608000000>;
+						required-opps = <&rpmhpd_opp_turbo>;
+					};
+				};
+			};
+	
+			mdss_dsi0: dsi@ae94000 {
+				compatible = "qcom,sm4450-dsi-ctrl", "qcom,mdss-dsi-ctrl";
+				reg = <0x0 0x0ae94000 0x0 0x400>;
+				reg-names = "dsi_ctrl";
+	
+				interrupt-parent = <&mdss>;
+				interrupts = <4>;
+	
+				clocks = <&dispcc DISP_CC_MDSS_BYTE0_CLK>,
+					 <&dispcc DISP_CC_MDSS_BYTE0_INTF_CLK>,
+					 <&dispcc DISP_CC_MDSS_PCLK0_CLK>,
+					 <&dispcc DISP_CC_MDSS_ESC0_CLK>,
+					 <&dispcc DISP_CC_MDSS_AHB_CLK>,
+					 <&gcc GCC_DISP_HF_AXI_CLK>;
+				clock-names = "byte",
+					      "byte_intf",
+					      "pixel",
+					      "core",
+					      "iface",
+					      "bus";
+	
+				assigned-clocks = <&dispcc DISP_CC_MDSS_BYTE0_CLK_SRC>,
+						  <&dispcc DISP_CC_MDSS_PCLK0_CLK_SRC>;
+				assigned-clock-parents = <&mdss_dsi0_phy DSI_BYTE_PLL_CLK>,
+							 <&mdss_dsi0_phy DSI_PIXEL_PLL_CLK>;
+	
+				operating-points-v2 = <&mdss_dsi_opp_table>;
+				power-domains = <&rpmhpd RPMHPD_CX>;
+	
+				phys = <&mdss_dsi0_phy>;
+				phy-names = "dsi";
+	
+	
+				#address-cells = <1>;
+				#size-cells = <0>;
+	
+				ports {
+					#address-cells = <1>;
+					#size-cells = <0>;
+	
+					port@0 {
+						reg = <0>;
+						mdss_dsi0_in: endpoint {
+							remote-endpoint = <&dpu_intf1_out>;
+						};
+					};
+	
+					port@1 {
+						reg = <1>;
+						mdss_dsi0_out: endpoint {
+							remote-endpoint = <&panel_in>;
+							data-lanes = <0 1 2 3>;
+						};
+					};
+				};
+	
+				mdss_dsi_opp_table: opp-table {
+					compatible = "operating-points-v2";
+	
+					opp-187500000 {
+						opp-hz = /bits/ 64 <187500000>;
+						required-opps = <&rpmhpd_opp_low_svs>;
+					};
+	
+					opp-300000000 {
+						opp-hz = /bits/ 64 <300000000>;
+						required-opps = <&rpmhpd_opp_svs>;
+					};
+	
+					opp-358000000 {
+						opp-hz = /bits/ 64 <358000000>;
+						required-opps = <&rpmhpd_opp_svs_l1>;
+					};
+				};
+	
+				panel: panel@0 {
+					compatible = "xiaomi,sky-m19-42-03-0b";
+					reg = <0>;
+					reset-gpios = <&tlmm 92 GPIO_ACTIVE_LOW>;
+					vddio-supply = <&vreg_panel_vddio>;
+					extvdd-supply = <&vreg_panel_extvdd>;
+					avdd-supply = <&vreg_panel_avdd>;
+	
+					port {
+						panel_in: endpoint {
+							remote-endpoint = <&mdss_dsi0_out>;
+						};
+					};
+				};
+			};
+	
+			mdss_dsi0_phy: phy@ae94400 {
+				compatible = "qcom,sm4450-dsi-phy-5nm", "qcom,sm8450-dsi-phy-5nm";
+				reg = <0x0 0x0ae94400 0x0 0x200>,
+				      <0x0 0x0ae94600 0x0 0x280>,
+				      <0x0 0x0ae94900 0x0 0x260>;
+				reg-names = "dsi_phy",
+					    "dsi_phy_lane",
+					    "dsi_pll";
+	
+				#clock-cells = <1>;
+				#phy-cells = <0>;
+	
+				clocks = <&dispcc DISP_CC_MDSS_AHB_CLK>,
+					 <&rpmhcc RPMH_CXO_CLK>;
+				clock-names = "iface", "ref";
+	
+			};
+		};
+};
+
+/* E007: vendor DT interconnect@... nodes (compatible qcom,ravelin-*): reg from Android /proc/device-tree. Only the four providers on the QUP wrapper 1 paths. */
+&soc {
+	clk_virt: interconnect-0 {
+		compatible = "qcom,sm4450-clk-virt";
+		#interconnect-cells = <2>;
+		qcom,bcm-voters = <&apps_bcm_voter>;
+	};
+
+	gem_noc: interconnect@19100000 {
+		compatible = "qcom,sm4450-gem-noc";
+		reg = <0x0 0x19100000 0x0 0xbc080>;
+		#interconnect-cells = <2>;
+		qcom,bcm-voters = <&apps_bcm_voter>;
+	};
+
+	cnoc2: interconnect@1500000 {
+		compatible = "qcom,sm4450-cnoc2";
+		reg = <0x0 0x01500000 0x0 0x6200>;
+		#interconnect-cells = <2>;
+		qcom,bcm-voters = <&apps_bcm_voter>;
+	};
+
+	cnoc3: interconnect@1510000 {
+		compatible = "qcom,sm4450-cnoc3";
+		reg = <0x0 0x01510000 0x0 0xf200>;
+		#interconnect-cells = <2>;
+		qcom,bcm-voters = <&apps_bcm_voter>;
+	};
+};
+
+&soc {
+	/* E007: vendor DT qcom,gpi-dma@a00000 (本机 /proc/device-tree): the touch SE has FIFO_IF_DISABLE=1 so it only works through GPI DMA. ee-offset 0x10000 -> sm6350 compatible; iommus 0x416. */
+	gpi_dma1: dma-controller@a00000 {
+		compatible = "qcom,sm6350-gpi-dma";
+		reg = <0x0 0x00a00000 0x0 0x60000>;
+		interrupts = <GIC_SPI 279 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 280 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 281 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 282 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 283 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 284 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 293 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 294 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 295 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 296 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 297 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 298 IRQ_TYPE_LEVEL_HIGH>;
+		dma-channels = <12>;
+		dma-channel-mask = <0x3f>;
+		iommus = <&apps_smmu 0x416 0x0>;
+		#dma-cells = <3>;
+		dma-coherent;
+	};
+};
+
+&tlmm {
+	/* vendor qupv3_se6_spi_*_active (本机 /proc/device-tree): gpio50 miso (qup1_se1_l0), gpio51 mosi (l1), gpio26 clk (l2), gpio27 cs (l3); all drive-strength 6, bias-pull-down */
+	qup_spi1_default: qup-spi1-default-state {
+		pins = "gpio26", "gpio27", "gpio50", "gpio51";
+		function = "qup1_se1";
+		drive-strength = <6>;
+		bias-pull-down;
+	};
+
+};
+
+/* geniqup@ac0000 = physical QUP wrapper 1 (sm4450.dtsi calls it qupv3_id_0 with WRAP_0 clocks: wrong, see reference repo notes) */
+&qupv3_id_0 {
+	clocks = <&gcc GCC_QUPV3_WRAP_1_M_AHB_CLK>,
+		 <&gcc GCC_QUPV3_WRAP_1_S_AHB_CLK>;
+	clock-names = "m-ahb", "s-ahb";
+	/* vendor qupv3_1_geni_se@ac0000: iommus 0x403, dma-coherent. The SPI core maps GPI-mode buffers with dev->parent = this node; without iommus the buffers got physical addresses and the SE DMA hung the bus (E007 runs 2-4). */
+	iommus = <&apps_smmu 0x403 0x0>;
+	dma-coherent;
+	status = "okay";
+
+	spi_touch: spi@a84000 {
+		compatible = "qcom,geni-spi";
+		reg = <0x0 0x00a84000 0x0 0x4000>;
+		interrupts = <GIC_SPI 354 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&gcc GCC_QUPV3_WRAP1_S1_CLK>;
+		clock-names = "se";
+		interconnects = <&clk_virt MASTER_QUP_CORE_1 QCOM_ICC_TAG_ALWAYS
+				 &clk_virt SLAVE_QUP_CORE_1 QCOM_ICC_TAG_ALWAYS>,
+				<&gem_noc MASTER_APPSS_PROC QCOM_ICC_TAG_ALWAYS
+				 &cnoc2 SLAVE_QUP_1 QCOM_ICC_TAG_ALWAYS>;
+		interconnect-names = "qup-core", "qup-config";
+		dmas = <&gpi_dma1 0 1 QCOM_GPI_SPI>,
+		       <&gpi_dma1 1 1 QCOM_GPI_SPI>;
+		dma-names = "tx", "rx";
+		pinctrl-0 = <&qup_spi1_default>;
+		pinctrl-names = "default";
+		#address-cells = <1>;
+		#size-cells = <0>;
+		status = "okay";
+
+		touchscreen@0 {
+			compatible = "focaltech,ft8720-spi";
+			reg = <0>;
+			spi-max-frequency = <9600000>;
+			interrupts-extended = <&tlmm 13 IRQ_TYPE_EDGE_FALLING>;
+			reset-gpios = <&tlmm 12 GPIO_ACTIVE_LOW>;
+			firmware-name = "focaltech/ft8720-sky.bin";
+			touchscreen-size-x = <1080>;
+			touchscreen-size-y = <2460>;
+		};
+	};
+};
+
+&{/reserved-memory} {
+	hyp@80000000 {
+		reg = <0x0 0x80000000 0x0 0x00600000>;
+		no-map;
+	};
+
+	xbl-dtlog@80600000 {
+		reg = <0x0 0x80600000 0x0 0x00040000>;
+		no-map;
+	};
+
+	xbl-ramdump@80640000 {
+		reg = <0x0 0x80640000 0x0 0x001c0000>;
+		no-map;
+	};
+
+	aop-image@80800000 {
+		reg = <0x0 0x80800000 0x0 0x00060000>;
+		no-map;
+	};
+
+	aop-config@80880000 {
+		reg = <0x0 0x80880000 0x0 0x00020000>;
+		no-map;
+	};
+
+	tme-crash-dump@808a0000 {
+		reg = <0x0 0x808a0000 0x0 0x00040000>;
+		no-map;
+	};
+
+	tme-log@808e0000 {
+		reg = <0x0 0x808e0000 0x0 0x00004000>;
+		no-map;
+	};
+
+	uefi-log@808e4000 {
+		reg = <0x0 0x808e4000 0x0 0x00010000>;
+		no-map;
+	};
+
+	cpucp-fw@80b00000 {
+		reg = <0x0 0x80b00000 0x0 0x00100000>;
+		no-map;
+	};
+
+	wlan_msa_mem: wlan-msa-mem@82a00000 {
+		reg = <0x0 0x82a00000 0x0 0x00300000>;
+		no-map;
+	};
+
+	camera@84b00000 {
+		reg = <0x0 0x84b00000 0x0 0x00800000>;
+		no-map;
+	};
+
+	wpss-moselle@85300000 {
+		reg = <0x0 0x85300000 0x0 0x01900000>;
+		no-map;
+	};
+
+	video@86c00000 {
+		reg = <0x0 0x86c00000 0x0 0x00700000>;
+		no-map;
+	};
+
+	adsp@87300000 {
+		reg = <0x0 0x87300000 0x0 0x02900000>;
+		no-map;
+	};
+
+	ipa-fw@89c00000 {
+		reg = <0x0 0x89c00000 0x0 0x00010000>;
+		no-map;
+	};
+
+	ipa-gsi@89c10000 {
+		reg = <0x0 0x89c10000 0x0 0x0000a000>;
+		no-map;
+	};
+
+	gpu-microcode@89c1a000 {
+		reg = <0x0 0x89c1a000 0x0 0x00002000>;
+		no-map;
+	};
+
+	mpss@8a000000 {
+		reg = <0x0 0x8a000000 0x0 0x0d700000>;
+		no-map;
+	};
+
+	xbl-sc@a6e00000 {
+		reg = <0x0 0xa6e00000 0x0 0x00040000>;
+		no-map;
+	};
+
+	global-sync@a6f00000 {
+		reg = <0x0 0xa6f00000 0x0 0x00100000>;
+		no-map;
+	};
+
+	cpusys-vm@e0600000 {
+		reg = <0x0 0xe0600000 0x0 0x00400000>;
+		no-map;
+	};
+
+	trust-ui-vm@e0b00000 {
+		reg = <0x0 0xe0b00000 0x0 0x04af3000>;
+		no-map;
+	};
+
+	trust-ui-vm-qrtr@e55f3000 {
+		reg = <0x0 0xe55f3000 0x0 0x00009000>;
+		no-map;
+	};
+
+	trust-ui-vm-vblk0-ring@e55fc000 {
+		reg = <0x0 0xe55fc000 0x0 0x00004000>;
+		no-map;
+	};
+
+	trust-ui-vm-swiotlb@e5600000 {
+		reg = <0x0 0xe5600000 0x0 0x00100000>;
+		no-map;
+	};
+
+	tz-stat@e8800000 {
+		reg = <0x0 0xe8800000 0x0 0x00100000>;
+		no-map;
+	};
+
+	tags@e8900000 {
+		reg = <0x0 0xe8900000 0x0 0x00680000>;
+		no-map;
+	};
+
+	qtee@e8f80000 {
+		reg = <0x0 0xe8f80000 0x0 0x00500000>;
+		no-map;
+	};
+
+	trusted-apps@e9480000 {
+		reg = <0x0 0xe9480000 0x0 0x01200000>;
+		no-map;
+	};
+
+	/* boot splash scanout (ABL), also used as simple-framebuffer in /chosen */
+	splash@b8000000 {
+		reg = <0x0 0xb8000000 0x0 0x2b00000>;
+		no-map;
+	};
+};
+
+
+/* E012: Adreno 613 (chip id 0x06010300 in the Android runtime DT). Nodes below are sliced from ROCKNIX (BSD-3-Clause), see tools/gen-m10-dts.py */
+&gpucc {
+	power-domains = <&rpmhpd RPMHPD_CX>,
+			<&rpmhpd RPMHPD_MX>;
+};
+
+&soc {
+	mc_virt: interconnect-1 {
+		compatible = "qcom,sm4450-mc-virt";
+		#interconnect-cells = <2>;
+		qcom,bcm-voters = <&apps_bcm_voter>;
+	};
+
+	qfprom: qfprom@221c8000 {
+		compatible = "qcom,sm4450-qfprom", "qcom,qfprom";
+		reg = <0x0 0x221c8000 0x0 0x1000>;
+		#address-cells = <1>;
+		#size-cells = <1>;
+		read-only;
+
+		gpu_speed_bin: gpu-speed-bin@119 {
+			reg = <0x119 0x2>;
+			bits = <5 8>;
+		};
+	};
+
+	gpu: gpu@3d00000 {
+		compatible = "qcom,adreno-613.0", "qcom,adreno";
+		reg = <0x0 0x03d00000 0x0 0x40000>,
+		      <0x0 0x03d9e000 0x0 0x1000>,
+		      <0x0 0x03d61000 0x0 0x800>;
+		reg-names = "kgsl_3d0_reg_memory",
+			    "cx_mem",
+			    "cx_dbgc";
+
+		interrupts = <GIC_SPI 300 IRQ_TYPE_LEVEL_HIGH>;
+
+		clocks = <&gpucc GPU_CC_GX_GFX3D_CLK>,
+			 <&gpucc GPU_CC_AHB_CLK>,
+			 <&gcc GCC_DDRSS_GPU_AXI_CLK>,
+			 <&gcc GCC_GPU_MEMNOC_GFX_CLK>,
+			 <&gpucc GPU_CC_CX_GMU_CLK>,
+			 <&gpucc GPU_CC_CXO_CLK>,
+			 <&gpucc GPU_CC_HUB_CX_INT_CLK>;
+		clock-names = "core",
+			      "iface",
+			      "mem_iface",
+			      "alt_mem_iface",
+			      "gmu",
+			      "xo",
+			      "hub";
+
+		interconnects = <&gem_noc MASTER_GFX3D QCOM_ICC_TAG_ALWAYS
+				 &mc_virt SLAVE_EBI1 QCOM_ICC_TAG_ALWAYS>;
+		interconnect-names = "gfx-mem";
+
+		iommus = <&adreno_smmu 0 0x400>;
+		power-domains = <&rpmhpd RPMHPD_CX>;
+
+		operating-points-v2 = <&gpu_opp_table>;
+
+		qcom,gmu = <&gmu_wrapper>;
+
+		nvmem-cells = <&gpu_speed_bin>;
+		nvmem-cell-names = "speed_bin";
+
+		#cooling-cells = <2>;
+
+		status = "okay";
+
+		zap-shader {
+			memory-region = <&{/reserved-memory/gpu-microcode@89c1a000}>;
+			firmware-name = "qcom/sm4450/a613_zap.mbn";
+		};
+
+		gpu_opp_table: opp-table {
+			compatible = "operating-points-v2";
+
+			opp-340000000 {
+				opp-hz = /bits/ 64 <340000000>;
+				required-opps = <&rpmhpd_opp_low_svs>;
+				opp-peak-kBps = <2136718>;
+				opp-supported-hw = <0xf>;
+			};
+
+			opp-500000000 {
+				opp-hz = /bits/ 64 <500000000>;
+				required-opps = <&rpmhpd_opp_svs>;
+				opp-peak-kBps = <3972656>;
+				opp-supported-hw = <0xf>;
+			};
+
+			opp-605000000 {
+				opp-hz = /bits/ 64 <605000000>;
+				required-opps = <&rpmhpd_opp_svs_l1>;
+				opp-peak-kBps = <5285156>;
+				opp-supported-hw = <0xf>;
+			};
+
+			opp-765000000 {
+				opp-hz = /bits/ 64 <765000000>;
+				required-opps = <&rpmhpd_opp_nom>;
+				opp-peak-kBps = <6671875>;
+				opp-supported-hw = <0xf>;
+			};
+
+			opp-850000000 {
+				opp-hz = /bits/ 64 <850000000>;
+				required-opps = <&rpmhpd_opp_nom_l1>;
+				opp-peak-kBps = <8332031>;
+				opp-supported-hw = <0x7>;
+			};
+
+			opp-955000000 {
+				opp-hz = /bits/ 64 <955000000>;
+				required-opps = <&rpmhpd_opp_turbo>;
+				opp-peak-kBps = <8332031>;
+				opp-supported-hw = <0x7>;
+			};
+
+			opp-1010000000 {
+				opp-hz = /bits/ 64 <1010000000>;
+				required-opps = <&rpmhpd_opp_turbo_l1>;
+				opp-peak-kBps = <8332031>;
+				opp-supported-hw = <0x5>;
+			};
+		};
+	};
+
+	gmu_wrapper: gmu@3d7d000 {
+		compatible = "qcom,adreno-gmu-wrapper";
+		reg = <0x0 0x03d6a000 0x0 0x30000>;
+		reg-names = "gmu";
+		power-domains = <&gpucc GPU_CC_CX_GDSC>,
+				<&gpucc GPU_CC_GX_GDSC>;
+		power-domain-names = "cx", "gx";
+		status = "okay";
+	};
+
+	adreno_smmu: iommu@3da0000 {
+		compatible = "qcom,sm4450-smmu-500", "qcom,adreno-smmu",
+			     "qcom,smmu-500", "arm,mmu-500";
+		reg = <0x0 0x03da0000 0x0 0x10000>;
+		#iommu-cells = <2>;
+		#global-interrupts = <1>;
+		dma-coherent;
+		interrupts = <GIC_SPI 674 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 678 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 679 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 680 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 681 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 682 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 683 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 684 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 685 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 686 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 687 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 688 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 422 IRQ_TYPE_LEVEL_HIGH>;
+
+		clocks = <&gpucc GPU_CC_CX_GMU_CLK>,
+			 <&gpucc GPU_CC_HUB_CX_INT_CLK>,
+			 <&gpucc GPU_CC_HLOS1_VOTE_GPU_SMMU_CLK>,
+			 <&gcc GCC_GPU_MEMNOC_GFX_CLK>,
+			 <&gcc GCC_GPU_SNOC_DVM_GFX_CLK>,
+			 <&gpucc GPU_CC_AHB_CLK>;
+		clock-names = "gmu",
+			      "hub",
+			      "hlos",
+			      "bus",
+			      "iface",
+			      "ahb";
+
+		power-domains = <&gpucc GPU_CC_CX_GDSC>;
+		status = "okay";
+	};
+};
+
+/* E015: Bluetooth (see tools/gen-m13-dts.py, docs/WIFI-BT.md) */
+&apps_rsc {
+	regulators-0 {
+		compatible = "qcom,pm6450-rpmh-regulators";
+		qcom,pmic-id = "b";
+
+		vreg_l11b_cxmx: ldo11 {
+			regulator-name = "vreg_l11b_cxmx";	/* WLAN vdd-cx-mx; vendor sets no voltage (config <0 0>), runtime DT limits 312-752 mV */
+			regulator-min-microvolt = <312000>;
+			regulator-max-microvolt = <752000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		vreg_l5b_0p88: ldo5 {
+			regulator-name = "vreg_l5b_0p88";
+			regulator-min-microvolt = <880000>;
+			regulator-max-microvolt = <880000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		vreg_l13b_1p2: ldo13 {
+			regulator-name = "vreg_l13b_1p2";
+			regulator-min-microvolt = <1140000>;
+			regulator-max-microvolt = <1260000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		vreg_l16b_1p2: ldo16 {
+			regulator-name = "vreg_l16b_1p2";
+			regulator-min-microvolt = <1200000>;
+			regulator-max-microvolt = <1200000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		vreg_l19b_1p8: ldo19 {
+			regulator-name = "vreg_l19b_1p8";
+			regulator-min-microvolt = <1700000>;
+			regulator-max-microvolt = <1950000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		vreg_l14b_1p3: ldo14 {
+			regulator-name = "vreg_l14b_1p3";
+			regulator-min-microvolt = <1304000>;
+			regulator-max-microvolt = <1304000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		vreg_l20b_1p7: ldo20 {
+			regulator-name = "vreg_l20b_1p7";
+			regulator-min-microvolt = <1700000>;
+			regulator-max-microvolt = <1900000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		vreg_l21b_1p8: ldo21 {
+			regulator-name = "vreg_l21b_1p8";
+			regulator-min-microvolt = <1800000>;
+			regulator-max-microvolt = <1800000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		vreg_l25b_3p3: ldo25 {
+			regulator-name = "vreg_l25b_3p3";
+			regulator-min-microvolt = <3000000>;
+			regulator-max-microvolt = <3300000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+			regulator-always-on;	/* USB2 HS PHY vdda33 */
+			regulator-boot-on;
+		};
+
+		vreg_l23b_1p8: ldo23 {
+			regulator-name = "vreg_l23b_1p8";
+			regulator-min-microvolt = <1800000>;
+			regulator-max-microvolt = <1800000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+			regulator-always-on;	/* also USB2 HS PHY vdda18 (runtime DT hsphy@88e3000) */
+			regulator-boot-on;
+		};
+	};
+
+	regulators-1 {
+		compatible = "qcom,pm8010-rpmh-regulators";
+		qcom,pmic-id = "e";
+
+		vreg_l5e_2p9: ldo5 {
+			regulator-name = "vreg_l5e_2p9";
+			regulator-min-microvolt = <2700000>;
+			regulator-max-microvolt = <3300000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
+		vreg_l7e_3p0: ldo7 {
+			regulator-name = "vreg_l7e_3p0";
+			regulator-min-microvolt = <3000000>;
+			regulator-max-microvolt = <3000000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+	};
+};
+
+/ {
+	/* E015 run 1: without any serial alias qcom_geni_serial fails with 'Invalid line -19' (ida range starts at highest alias + 1 = -18) */
+	aliases {
+		serial1 = &uart2;
+	};
+
+	wcn3950-pmu {
+		compatible = "qcom,wcn3950-pmu";
+
+		pinctrl-0 = <&sw_ctrl_default>;
+		pinctrl-names = "default";
+
+		vddio-supply = <&vreg_l21b_1p8>;
+		vddxo-supply = <&vreg_l23b_1p8>;
+		vddrf-supply = <&vreg_l14b_1p3>;
+		vddch0-supply = <&vreg_l7e_3p0>;
+
+		swctrl-gpios = <&tlmm 56 GPIO_ACTIVE_HIGH>;
+
+		regulators {
+			vreg_pmu_io: ldo0 {
+				regulator-name = "vreg_pmu_io";
+			};
+
+			vreg_pmu_xo: ldo1 {
+				regulator-name = "vreg_pmu_xo";
+			};
+
+			vreg_pmu_rf: ldo2 {
+				regulator-name = "vreg_pmu_rf";
+			};
+
+			vreg_pmu_ch0: ldo3 {
+				regulator-name = "vreg_pmu_ch0";
+			};
+		};
+	};
+};
+
+&soc {
+	qupv3_wrap0: geniqup@9c0000 {
+		compatible = "qcom,geni-se-qup";
+		reg = <0x0 0x009c0000 0x0 0x2000>;
+		ranges;
+		iommus = <&apps_smmu 0x163 0x0>;
+		dma-coherent;
+		clocks = <&gcc GCC_QUPV3_WRAP_0_M_AHB_CLK>,
+			 <&gcc GCC_QUPV3_WRAP_0_S_AHB_CLK>;
+		clock-names = "m-ahb", "s-ahb";
+		#address-cells = <2>;
+		#size-cells = <2>;
+		status = "okay";
+
+		uart2: serial@988000 {
+			compatible = "qcom,geni-uart";
+			reg = <0x0 0x00988000 0x0 0x4000>;
+			clocks = <&gcc GCC_QUPV3_WRAP0_S2_CLK>;
+			clock-names = "se";
+			interrupts-extended = <&intc GIC_SPI 603 IRQ_TYPE_LEVEL_HIGH>,
+					      <&tlmm 17 IRQ_TYPE_EDGE_FALLING>;
+			interconnects = <&clk_virt MASTER_QUP_CORE_0 QCOM_ICC_TAG_ALWAYS
+					 &clk_virt SLAVE_QUP_CORE_0 QCOM_ICC_TAG_ALWAYS>,
+					<&gem_noc MASTER_APPSS_PROC QCOM_ICC_TAG_ALWAYS
+					 &cnoc2 SLAVE_QUP_0 QCOM_ICC_TAG_ALWAYS>;
+			interconnect-names = "qup-core", "qup-config";
+			pinctrl-0 = <&qup_uart2_default>;
+			pinctrl-1 = <&qup_uart2_sleep>;
+			pinctrl-names = "default", "sleep";
+			status = "okay";
+
+			bluetooth: bluetooth {
+				compatible = "qcom,wcn3950-bt";
+
+				vddio-supply = <&vreg_pmu_io>;
+				vddxo-supply = <&vreg_pmu_xo>;
+				vddrf-supply = <&vreg_pmu_rf>;
+				vddch0-supply = <&vreg_pmu_ch0>;
+				max-speed = <3200000>;
+			};
+		};
+	};
+};
+
+&tlmm {
+	qup_uart2_default: qup-uart2-default-state {
+		cts-pins {
+			pins = "gpio14";
+			function = "qup0_se2";
+			drive-strength = <2>;
+			bias-disable;
+		};
+
+		rts-pins {
+			pins = "gpio15";
+			function = "qup0_se2";
+			drive-strength = <2>;
+			bias-pull-down;
+		};
+
+		tx-pins {
+			pins = "gpio16";
+			function = "qup0_se2";
+			drive-strength = <2>;
+			bias-pull-up;
+		};
+
+		rx-pins {
+			pins = "gpio17";
+			function = "qup0_se2";
+			drive-strength = <2>;
+			bias-disable;
+		};
+	};
+
+	qup_uart2_sleep: qup-uart2-sleep-state {
+		cts-pins {
+			pins = "gpio14";
+			function = "gpio";
+			drive-strength = <2>;
+			bias-pull-down;
+		};
+
+		rts-pins {
+			pins = "gpio15";
+			function = "gpio";
+			drive-strength = <2>;
+			bias-pull-down;
+		};
+
+		tx-pins {
+			pins = "gpio16";
+			function = "gpio";
+			drive-strength = <2>;
+			bias-pull-up;
+		};
+
+		rx-pins {
+			pins = "gpio17";
+			function = "gpio";
+			drive-strength = <2>;
+			bias-pull-up;
+		};
+	};
+
+	sw_ctrl_default: sw-ctrl-default-state {
+		pins = "gpio56";
+		function = "gpio";
+		bias-pull-down;
+	};
+};
+
+/* E016: WiFi (see tools/gen-m14-dts.py) — m12 block follows */
+
+/* E014: IPC stack + WPSS remoteproc (see tools/gen-m12-dts.py) */
+/ {
+	smp2p-wpss {
+		compatible = "qcom,smp2p";
+		qcom,smem = <617>, <616>;
+		interrupts-extended = <&ipcc IPCC_CLIENT_WPSS IPCC_MPROC_SIGNAL_SMP2P IRQ_TYPE_EDGE_RISING>;
+		mboxes = <&ipcc IPCC_CLIENT_WPSS IPCC_MPROC_SIGNAL_SMP2P>;
+		qcom,local-pid = <0>;
+		qcom,remote-pid = <13>;
+
+		smp2p_wpss_out: master-kernel {
+			qcom,entry-name = "master-kernel";
+			#qcom,smem-state-cells = <1>;
+		};
+
+		smp2p_wpss_in: slave-kernel {
+			qcom,entry-name = "slave-kernel";
+			interrupt-controller;
+			#interrupt-cells = <2>;
+		};
+
+		wlan_smp2p_out: wlan-ap-to-wpss {
+			qcom,entry-name = "wlan";
+			#qcom,smem-state-cells = <1>;
+		};
+
+		wlan_smp2p_in: wlan-wpss-to-ap {
+			qcom,entry-name = "wlan";
+			interrupt-controller;
+			#interrupt-cells = <2>;
+		};
+
+		wlan_smp2p_2_out: wlan-soc-wake-ap-to-wpss {
+			qcom,entry-name = "wlan_soc_wake";
+			#qcom,smem-state-cells = <1>;
+		};
+
+		wlan_smp2p_2_in: wlan-soc-wake-wpss-to-ap {
+			qcom,entry-name = "wlan_soc_wake";
+			interrupt-controller;
+			#interrupt-cells = <2>;
+		};
+
+		wlan_smp2p_3_out: wlan-ep-powersave-ap-to-wpss {
+			qcom,entry-name = "wlan_ep_power_save";
+			#qcom,smem-state-cells = <1>;
+		};
+	};
+};
+
+&soc {
+	ipcc: mailbox@ed18000 {
+		compatible = "qcom,sm4450-ipcc", "qcom,ipcc";
+		reg = <0x0 0x0ed18000 0x0 0x1000>;
+		interrupts = <GIC_SPI 229 IRQ_TYPE_LEVEL_HIGH>;
+		interrupt-controller;
+		#interrupt-cells = <3>;
+		#mbox-cells = <2>;
+	};
+
+	aoss_qmp: power-management@c300000 {
+		compatible = "qcom,sm4450-aoss-qmp", "qcom,aoss-qmp";
+		reg = <0x0 0x0c300000 0x0 0x400>;
+		interrupt-parent = <&ipcc>;
+		interrupts-extended = <&ipcc IPCC_CLIENT_AOP IPCC_MPROC_SIGNAL_GLINK_QMP IRQ_TYPE_EDGE_RISING>;
+		mboxes = <&ipcc IPCC_CLIENT_AOP IPCC_MPROC_SIGNAL_GLINK_QMP>;
+		#clock-cells = <0>;
+	};
+
+	remoteproc_wpss: remoteproc@8a00000 {
+		compatible = "qcom,sm4450-wpss-pas";
+		reg = <0x0 0x08a00000 0x0 0x10000>;
+
+		interrupts-extended = <&intc GIC_SPI 587 IRQ_TYPE_EDGE_RISING>,
+				      <&smp2p_wpss_in 0 IRQ_TYPE_EDGE_RISING>,
+				      <&smp2p_wpss_in 1 IRQ_TYPE_EDGE_RISING>,
+				      <&smp2p_wpss_in 2 IRQ_TYPE_EDGE_RISING>,
+				      <&smp2p_wpss_in 3 IRQ_TYPE_EDGE_RISING>;
+		interrupt-names = "wdog", "fatal", "ready", "handover", "stop-ack";
+
+		clocks = <&rpmhcc RPMH_CXO_CLK>;
+		clock-names = "xo";
+
+		power-domains = <&rpmhpd RPMHPD_CX>, <&rpmhpd RPMHPD_MX>;
+		power-domain-names = "cx", "mx";
+
+		memory-region = <&{/reserved-memory/wpss-moselle@85300000}>;
+
+		qcom,qmp = <&aoss_qmp>;
+		qcom,smem-states = <&smp2p_wpss_out 0>;
+		qcom,smem-state-names = "stop";
+
+		firmware-name = "adrastea/wpss.mdt";
+
+		glink-edge {
+			interrupts-extended = <&ipcc IPCC_CLIENT_WPSS IPCC_MPROC_SIGNAL_GLINK_QMP IRQ_TYPE_EDGE_RISING>;
+			mboxes = <&ipcc IPCC_CLIENT_WPSS IPCC_MPROC_SIGNAL_GLINK_QMP>;
+			label = "wpss";
+			qcom,remote-pid = <13>;
+		};
+	};
+};
+
+&soc {
+	wifi: wifi@22800000 {
+		compatible = "qcom,icnss";
+		reg = <0x0 0x22800000 0x0 0x800000>;
+		reg-names = "membase";
+		interrupt-parent = <&intc>;
+		qcom,wlan-msa-fixed-region = <&wlan_msa_mem>;
+		qcom,rproc-handle = <&remoteproc_wpss>;
+		qcom,fw-prefix;
+		qcom,wlan;
+		bdf-download-support;
+		wpss-support-enable;
+
+		interrupts = <GIC_SPI 389 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 413 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 416 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 417 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 434 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 435 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 438 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 439 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 440 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 451 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 453 IRQ_TYPE_LEVEL_HIGH>,
+			     <GIC_SPI 454 IRQ_TYPE_LEVEL_HIGH>;
+
+		iommus = <&apps_smmu 0x4c0 0x1>;
+		qcom,iommu-dma = "fastmap";
+		qcom,iommu-faults = "stall-disable", "HUPCF", "non-fatal";
+		qcom,iommu-dma-addr-pool = <0xa0000000 0x10000000>;
+		qcom,iommu-geometry = <0xa0000000 0x10000000>;
+
+		qcom,vdd-cx-mx-config = <0 0>;
+		qcom,vdd-3.3-ch0-config = <3000000 3312000>;
+		qcom,smem-states = <&wlan_smp2p_out 0>,
+				   <&wlan_smp2p_2_out 0>,
+				   <&wlan_smp2p_3_out 0>;
+		qcom,smem-state-names = "wlan-smp2p-out",
+					"wlan-soc-wake-smp2p-out",
+					"wlan-ep-powersave-smp2p-out";
+
+		vdd-cx-mx-supply = <&vreg_l11b_cxmx>;
+		vdd-1.8-xo-supply = <&vreg_l23b_1p8>;
+		vdd-1.3-rfa-supply = <&vreg_l14b_1p3>;
+		vdd-3.3-ch0-supply = <&vreg_l7e_3p0>;
+
+		status = "okay";
+
+		qcom,smp2p_map_wlan_1_in {
+			interrupts-extended = <&wlan_smp2p_in 0 0>,
+					      <&wlan_smp2p_in 1 0>;
+			interrupt-names = "qcom,smp2p-force-fatal-error",
+					  "qcom,smp2p-early-crash-ind";
+		};
+
+		qcom,smp2p_map_wlan_2_in {
+			interrupts-extended = <&wlan_smp2p_2_in 0 0>;
+			interrupt-names = "qcom,smp2p-soc-wake-ack";
+		};
+	};
+};
+
+&tlmm {
+	gpio-reserved-ranges = <0 4>, <18 4>;	/* vendor qcom,gpios-reserved = <0 1 2 3 18 19 20 21> (TZ-owned) */
+};
+
+/* E020: UFS (read-only look; see tools/gen-m15-dts.py, docs/STORAGE.md) */
+&soc {
+	ufs_mem_hc: ufshc@1d84000 {
+		compatible = "qcom,sm8450-ufshc", "qcom,ufshc", "jedec,ufs-2.0";
+		reg = <0x0 0x01d84000 0x0 0x3000>;
+		interrupts = <GIC_SPI 265 IRQ_TYPE_LEVEL_HIGH>;
+		phys = <&ufs_mem_phy>;
+		phy-names = "ufsphy";
+		lanes-per-direction = <2>;
+		#reset-cells = <1>;
+		resets = <&gcc GCC_UFS_PHY_BCR>;
+		reset-names = "rst";
+		reset-gpios = <&tlmm 136 GPIO_ACTIVE_LOW>;
+
+		power-domains = <&gcc GCC_UFS_PHY_GDSC>;
+
+		iommus = <&apps_smmu 0x580 0x0>;
+		dma-coherent;
+
+		clock-names = "core_clk", "bus_aggr_clk", "iface_clk", "core_clk_unipro",
+			      "ref_clk", "tx_lane0_sync_clk", "rx_lane0_sync_clk", "rx_lane1_sync_clk";
+		clocks = <&gcc GCC_UFS_PHY_AXI_CLK>,
+			 <&gcc GCC_AGGRE_UFS_PHY_AXI_CLK>,
+			 <&gcc GCC_UFS_PHY_AHB_CLK>,
+			 <&gcc GCC_UFS_PHY_UNIPRO_CORE_CLK>,
+			 <&rpmhcc RPMH_CXO_CLK>,
+			 <&gcc GCC_UFS_PHY_TX_SYMBOL_0_CLK>,
+			 <&gcc GCC_UFS_PHY_RX_SYMBOL_0_CLK>,
+			 <&gcc GCC_UFS_PHY_RX_SYMBOL_1_CLK>;
+		freq-table-hz = <75000000 300000000>,
+				<0 0>,
+				<0 0>,
+				<75000000 300000000>,
+				<75000000 300000000>,
+				<0 0>,
+				<0 0>,
+				<0 0>;
+
+		vcc-supply = <&vreg_l5e_2p9>;
+		vcc-max-microamp = <1056000>;
+		vccq-supply = <&vreg_l13b_1p2>;
+		vccq-max-microamp = <750000>;
+		vccq2-supply = <&vreg_l19b_1p8>;
+		vccq2-max-microamp = <750000>;
+
+		status = "okay";
+	};
+
+	ufs_mem_phy: phy@1d87000 {
+		compatible = "qcom,sm4450-qmp-ufs-phy";
+		reg = <0x0 0x01d87000 0x0 0x1000>;
+
+		clock-names = "ref", "ref_aux", "qref";
+		clocks = <&rpmhcc RPMH_CXO_CLK>,
+			 <&gcc GCC_UFS_PHY_PHY_AUX_CLK>,
+			 <&gcc GCC_UFS_0_CLKREF_EN>;
+
+		power-domains = <&gcc GCC_UFS_PHY_GDSC>;
+
+		resets = <&ufs_mem_hc 0>;
+		reset-names = "ufsphy";
+
+		vdda-phy-supply = <&vreg_l5b_0p88>;
+		vdda-pll-supply = <&vreg_l16b_1p2>;
+
+		#clock-cells = <1>;
+		#phy-cells = <0>;
+
+		status = "okay";
+	};
+};
+
+/* E022: keys + PON + RTC (pmk8350 @ SID 0) */
+&soc {
+	/* SPMI arbiter as in tools/gen-m7-dts.py (runtime DT qcom,spmi@c42d000, ee 0, channel 0); only the pmk8350 (SID 0) child is declared */
+	spmi_bus: spmi@c400000 {
+		compatible = "qcom,spmi-pmic-arb";
+		reg = <0x0 0x0c400000 0x0 0x00003000>,
+		      <0x0 0x0c500000 0x0 0x00400000>,
+		      <0x0 0x0c440000 0x0 0x00080000>,
+		      <0x0 0x0c4c0000 0x0 0x00010000>,
+		      <0x0 0x0c42d000 0x0 0x00004000>;
+		reg-names = "core", "chnls", "obsrvr", "intr", "cnfg";
+		interrupts-extended = <&pdc 1 IRQ_TYPE_LEVEL_HIGH>;
+		interrupt-names = "periph_irq";
+		interrupt-controller;
+		#interrupt-cells = <4>;
+		qcom,ee = <0>;
+		qcom,channel = <0>;
+		#address-cells = <2>;
+		#size-cells = <0>;
+
+	pmk8350: pmic@0 {
+		compatible = "qcom,pmk8350", "qcom,spmi-pmic";
+		reg = <0 SPMI_USID>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		pmk8350_pon: pon@1300 {
+			compatible = "qcom,pmk8350-pon";
+			reg = <0x1300>, <0x800>;
+			reg-names = "hlos", "pbs";
+
+			pon_pwrkey: pwrkey {
+				compatible = "qcom,pmk8350-pwrkey";
+				interrupts = <0 0x13 0x7 IRQ_TYPE_EDGE_BOTH>;
+				linux,code = <KEY_POWER>;
+			};
+
+			pon_resin: resin {
+				compatible = "qcom,pmk8350-resin";
+				interrupts = <0 0x13 0x6 IRQ_TYPE_EDGE_BOTH>;
+				linux,code = <KEY_VOLUMEDOWN>;
+			};
+		};
+
+		pmk8350_rtc: rtc@6100 {
+			compatible = "qcom,pmk8350-rtc";
+			reg = <0x6100>, <0x6200>;
+			reg-names = "rtc", "alarm";
+			interrupts = <0 0x62 0x1 IRQ_TYPE_EDGE_RISING>;
+			allow-set-time;
+		};
+	};
+	};
+};
+
+&tlmm {
+	key_vol_up_default: key-vol-up-default-state {
+		pins = "gpio53";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-pull-up;
+		input-enable;
+	};
+};
+
+/ {
+	gpio-keys {
+		compatible = "gpio-keys";
+		pinctrl-names = "default";
+		pinctrl-0 = <&key_vol_up_default>;
+
+		key-volume-up {
+			label = "Volume Up";
+			gpios = <&tlmm 53 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_VOLUMEUP>;
+			debounce-interval = <15>;
+			wakeup-source;
+		};
+	};
+
+	smp2p-adsp {
+		compatible = "qcom,smp2p";
+		qcom,smem = <443>, <429>;
+		interrupts-extended = <&ipcc IPCC_CLIENT_LPASS IPCC_MPROC_SIGNAL_SMP2P IRQ_TYPE_EDGE_RISING>;
+		mboxes = <&ipcc IPCC_CLIENT_LPASS IPCC_MPROC_SIGNAL_SMP2P>;
+		qcom,local-pid = <0>;
+		qcom,remote-pid = <2>;
+
+		smp2p_adsp_out: master-kernel {
+			qcom,entry-name = "master-kernel";
+			#qcom,smem-state-cells = <1>;
+		};
+
+		smp2p_adsp_in: slave-kernel {
+			qcom,entry-name = "slave-kernel";
+			interrupt-controller;
+			#interrupt-cells = <2>;
+		};
+	};
+
+	pmic-glink {
+		compatible = "qcom,sm8550-pmic-glink", "qcom,pmic-glink";
+		xiaomi,input-suspend-limit;   /* local (m22): qcom_battmgr implements charge_control_{start,end}_threshold (80/75) with the Xiaomi input_suspend property */
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		connector@0 {
+			compatible = "usb-c-connector";
+			reg = <0>;
+			power-role = "dual";
+			data-role = "dual";
+
+			ports {
+				#address-cells = <1>;
+				#size-cells = <0>;
+
+				port@0 {
+					reg = <0>;
+
+					pmic_glink_hs_in: endpoint {
+						remote-endpoint = <&usb_1_dwc3_hs>;
+					};
+				};
+			};
+		};
+	};
+};
+
+&soc {
+	remoteproc_adsp: remoteproc@3000000 {
+		compatible = "qcom,sm4450-adsp-pas";
+		reg = <0x0 0x03000000 0x0 0x10000>;
+
+		interrupts-extended = <&pdc 6 IRQ_TYPE_EDGE_RISING>,
+				      <&smp2p_adsp_in 0 IRQ_TYPE_EDGE_RISING>,
+				      <&smp2p_adsp_in 1 IRQ_TYPE_EDGE_RISING>,
+				      <&smp2p_adsp_in 2 IRQ_TYPE_EDGE_RISING>,
+				      <&smp2p_adsp_in 3 IRQ_TYPE_EDGE_RISING>;
+		interrupt-names = "wdog", "fatal", "ready", "handover", "stop-ack";
+
+		clocks = <&rpmhcc RPMH_CXO_CLK>;
+		clock-names = "xo";
+
+		power-domains = <&rpmhpd RPMHPD_LCX>, <&rpmhpd RPMHPD_LMX>;
+		power-domain-names = "lcx", "lmx";
+
+		memory-region = <&{/reserved-memory/adsp@87300000}>;
+
+		qcom,qmp = <&aoss_qmp>;
+		qcom,smem-states = <&smp2p_adsp_out 0>;
+		qcom,smem-state-names = "stop";
+
+		firmware-name = "adrastea/adsp.mdt";
+
+		glink-edge {
+			interrupts-extended = <&ipcc IPCC_CLIENT_LPASS IPCC_MPROC_SIGNAL_GLINK_QMP IRQ_TYPE_EDGE_RISING>;
+			mboxes = <&ipcc IPCC_CLIENT_LPASS IPCC_MPROC_SIGNAL_GLINK_QMP>;
+			label = "lpass";
+			qcom,remote-pid = <2>;
+
+			gpr {
+				compatible = "qcom,gpr";
+				qcom,glink-channels = "adsp_apps";
+				qcom,domain = <GPR_DOMAIN_ID_ADSP>;
+				qcom,intents = <512 20>;
+				#address-cells = <1>;
+				#size-cells = <0>;
+
+				q6apm: service@1 {
+					compatible = "qcom,q6apm";
+					reg = <GPR_APM_MODULE_IID>;
+					#sound-dai-cells = <0>;
+					qcom,protection-domain = "avs/audio", "msm/adsp/audio_pd";
+
+					q6apmdai: dais {
+						compatible = "qcom,q6apm-dais";
+						iommus = <&apps_smmu 0x1001 0x0>;
+					};
+
+					q6apmbedai: bedais {
+						compatible = "qcom,q6apm-lpass-dais";
+						#sound-dai-cells = <1>;
+					};
+				};
+
+				q6prm: service@2 {
+					compatible = "qcom,q6prm";
+					reg = <GPR_PRM_MODULE_IID>;
+					qcom,protection-domain = "avs/audio", "msm/adsp/audio_pd";
+
+					q6prmcc: clock-controller {
+						compatible = "qcom,q6prm-lpass-clocks";
+						#clock-cells = <2>;
+					};
+				};
+			};
+		};
+	};
+};
+
+/* E022 run 8: the upstream sm4450.dtsi PDC ranges (<94 494 31>, no 4th range) do not match this phone's runtime DT (qcom,pdc-ranges = <0 480 94>, <94 609 31>, <125 63 1>, <126 716 12>, same as sm8450);
+   PDC-routed TLMM pins (volume-up = GPIO53 -> PDC 114) never delivered their interrupt. */
+&pdc {
+	qcom,pdc-ranges = <0 480 94>, <94 609 31>, <125 63 1>, <126 716 12>;
+};
+
+/* E027 audio */
+&soc {
+		rxmacro: codec@3200000 {
+			compatible = "qcom,sm8450-lpass-rx-macro";
+			reg = <0 0x03200000 0 0x1000>;
+			clocks = <&q6prmcc LPASS_CLK_ID_RX_CORE_TX_MCLK LPASS_CLK_ATTRIBUTE_COUPLE_NO>,
+				 <&q6prmcc LPASS_CLK_ID_RX_CORE_MCLK2_2X_MCLK LPASS_CLK_ATTRIBUTE_COUPLE_NO>,
+				 <&lpass_macro_vote_stub>,
+				 <&q6prmcc LPASS_HW_DCODEC_VOTE LPASS_CLK_ATTRIBUTE_COUPLE_NO>,
+				 <&vamacro>;
+			clock-names = "mclk", "npl", "macro", "dcodec", "fsgen";
+
+			#clock-cells = <0>;
+			clock-output-names = "mclk";
+			#sound-dai-cells = <1>;
+		};
+
+		swr1: soundwire@3210000 {
+			compatible = "qcom,soundwire-v1.7.0";
+			reg = <0 0x03210000 0 0x2000>;
+			interrupts = <GIC_SPI 155 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&rxmacro>;
+			clock-names = "iface";
+			label = "RX";
+			qcom,din-ports = <0>;
+			qcom,dout-ports = <6>;
+
+			pinctrl-0 = <&rx_swr_active>;
+			pinctrl-names = "default";
+
+			qcom,ports-sinterval =		/bits/ 16 <0x03 0x3f 0x1f 0x07 0x00 0x18f>;
+			qcom,ports-offset1 =		/bits/ 8 <0x00 0x00 0x0b 0x01 0x00 0x00>;
+			qcom,ports-offset2 =		/bits/ 8 <0x00 0x00 0x0b 0x00 0x00 0x00>;
+			qcom,ports-hstart =		/bits/ 8 <0xff 0x03 0xff 0xff 0xff 0x08>;
+			qcom,ports-hstop =		/bits/ 8 <0xff 0x06 0xff 0xff 0xff 0x08>;
+			qcom,ports-word-length =	/bits/ 8 <0x01 0x07 0x04 0xff 0xff 0x0f>;
+			qcom,ports-block-pack-mode =	/bits/ 8 <0xff 0x00 0x01 0xff 0xff 0x00>;
+			qcom,ports-block-group-count =	/bits/ 8 <0xff 0xff 0xff 0xff 0x00 0x00>;
+			qcom,ports-lane-control =	/bits/ 8 <0x01 0x00 0x00 0x00 0x00 0x00>;
+
+			#address-cells = <2>;
+			#size-cells = <0>;
+			#sound-dai-cells = <1>;
+		};
+
+		txmacro: codec@3220000 {
+			compatible = "qcom,sm8450-lpass-tx-macro";
+			qcom,dmic-sample-rate = <2400000>;
+			reg = <0 0x03220000 0 0x1000>;
+			clocks = <&q6prmcc LPASS_CLK_ID_RX_CORE_TX_MCLK LPASS_CLK_ATTRIBUTE_COUPLE_NO>,
+				 <&q6prmcc LPASS_CLK_ID_RX_CORE_MCLK2_2X_MCLK LPASS_CLK_ATTRIBUTE_COUPLE_NO>,
+				 <&lpass_macro_vote_stub>,
+				 <&q6prmcc LPASS_HW_DCODEC_VOTE LPASS_CLK_ATTRIBUTE_COUPLE_NO>,
+				 <&vamacro>;
+			clock-names = "mclk", "npl", "macro", "dcodec", "fsgen";
+
+			#clock-cells = <0>;
+			clock-output-names = "mclk";
+			#sound-dai-cells = <1>;
+		};
+
+		swr2: soundwire@33b0000 {
+			compatible = "qcom,soundwire-v1.7.0";
+			reg = <0 0x033b0000 0 0x2000>;
+			interrupts = <GIC_SPI 496 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 520 IRQ_TYPE_LEVEL_HIGH>;
+			interrupt-names = "core", "wakeup";
+
+			clocks = <&txmacro>;
+			clock-names = "iface";
+			label = "TX";
+
+			pinctrl-0 = <&tx_swr_active>;
+			pinctrl-names = "default";
+
+			qcom,din-ports = <4>;
+			qcom,dout-ports = <0>;
+			qcom,ports-sinterval-low =	/bits/ 8 <0x01 0x01 0x03 0x03>;
+			qcom,ports-offset1 =		/bits/ 8 <0x00 0x00 0x01 0x01>;
+			qcom,ports-offset2 =		/bits/ 8 <0x00 0x00 0x00 0x00>;
+			qcom,ports-hstart =		/bits/ 8 <0xff 0xff 0xff 0xff>;
+			qcom,ports-hstop =		/bits/ 8 <0xff 0xff 0xff 0xff>;
+			qcom,ports-word-length =	/bits/ 8 <0xff 0xff 0xff 0xff>;
+			qcom,ports-block-pack-mode =	/bits/ 8 <0xff 0xff 0xff 0xff>;
+			qcom,ports-block-group-count =	/bits/ 8 <0xff 0xff 0xff 0xff>;
+			qcom,ports-lane-control =	/bits/ 8 <0x01 0x02 0x00 0x00>;
+
+			#address-cells = <2>;
+			#size-cells = <0>;
+			#sound-dai-cells = <1>;
+		};
+
+		vamacro: codec@33f0000 {
+			compatible = "qcom,sm8450-lpass-va-macro";
+			reg = <0 0x033f0000 0 0x1000>;
+			clocks = <&q6prmcc LPASS_CLK_ID_TX_CORE_MCLK LPASS_CLK_ATTRIBUTE_COUPLE_NO>,
+				 <&lpass_macro_vote_stub>,
+				 <&q6prmcc LPASS_HW_DCODEC_VOTE LPASS_CLK_ATTRIBUTE_COUPLE_NO>,
+				 <&q6prmcc LPASS_CLK_ID_RX_CORE_MCLK2_2X_MCLK LPASS_CLK_ATTRIBUTE_COUPLE_NO>;
+			clock-names = "mclk", "macro", "dcodec", "npl";
+			qcom,dmic-sample-rate = <600000>;
+
+			#clock-cells = <0>;
+			clock-output-names = "fsgen";
+			#sound-dai-cells = <1>;
+		};
+
+		lpass_tlmm: pinctrl@3440000 {
+			compatible = "qcom,sm8450-lpass-lpi-pinctrl";	/* SM4450 runtime DT: same 23-pin map and offsets */
+			reg = <0 0x03440000 0x0 0x20000>,
+			      <0 0x034d0000 0x0 0x10000>;
+			gpio-controller;
+			#gpio-cells = <2>;
+			gpio-ranges = <&lpass_tlmm 0 0 23>;
+
+			clocks = <&lpass_macro_vote_stub>,
+				 <&q6prmcc LPASS_HW_DCODEC_VOTE LPASS_CLK_ATTRIBUTE_COUPLE_NO>;
+			clock-names = "core", "audio";
+
+			tx_swr_active: tx-swr-active-state {
+				clk-pins {
+					pins = "gpio0";
+					function = "swr_tx_clk";
+					drive-strength = <2>;
+					slew-rate = <1>;
+					bias-disable;
+				};
+
+				data-pins {
+					pins = "gpio1", "gpio2", "gpio14";
+					function = "swr_tx_data";
+					drive-strength = <2>;
+					slew-rate = <1>;
+					bias-bus-hold;
+				};
+			};
+
+			rx_swr_active: rx-swr-active-state {
+				clk-pins {
+					pins = "gpio3";
+					function = "swr_rx_clk";
+					drive-strength = <2>;
+					slew-rate = <1>;
+					bias-disable;
+				};
+
+				data-pins {
+					pins = "gpio4", "gpio5";
+					function = "swr_rx_data";
+					drive-strength = <2>;
+					slew-rate = <1>;
+					bias-bus-hold;
+				};
+			};
+
+			dmic01_default: dmic01-default-state {
+				clk-pins {
+					pins = "gpio6";
+					function = "dmic1_clk";
+					drive-strength = <8>;
+					output-high;
+				};
+
+				data-pins {
+					pins = "gpio7";
+					function = "dmic1_data";
+					drive-strength = <8>;
+				};
+			};
+
+			dmic23_default: dmic23-default-state {
+				clk-pins {
+					pins = "gpio8";
+					function = "dmic2_clk";
+					drive-strength = <8>;
+					output-high;
+				};
+
+				data-pins {
+					pins = "gpio9";
+					function = "dmic2_data";
+					drive-strength = <8>;
+				};
+			};
+
+			wsa_swr_active: wsa-swr-active-state {
+				clk-pins {
+					pins = "gpio10";
+					function = "wsa_swr_clk";
+					drive-strength = <2>;
+					slew-rate = <1>;
+					bias-disable;
+				};
+
+				data-pins {
+					pins = "gpio11";
+					function = "wsa_swr_data";
+					drive-strength = <2>;
+					slew-rate = <1>;
+					bias-bus-hold;
+				};
+			};
+
+			wsa2_swr_active: wsa2-swr-active-state {
+				clk-pins {
+					pins = "gpio15";
+					function = "wsa2_swr_clk";
+					drive-strength = <2>;
+					slew-rate = <1>;
+					bias-disable;
+				};
+
+				data-pins {
+					pins = "gpio16";
+					function = "wsa2_swr_data";
+					drive-strength = <2>;
+					slew-rate = <1>;
+					bias-bus-hold;
+				};
+			};
+		};
+
+};
+
+/ {
+	lpass_macro_vote_stub: clock-lpass-macro-vote-stub {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <19200000>;
+	};
+
+	vph_pwr: regulator-vph-pwr {
+		compatible = "regulator-fixed";
+		regulator-name = "vph_pwr";
+		regulator-min-microvolt = <3700000>;
+		regulator-max-microvolt = <3700000>;
+		regulator-always-on;
+	};
+
+	wcd9370: audio-codec-0 {
+		compatible = "qcom,wcd9370-codec";
+
+		pinctrl-0 = <&wcd_default>;
+		pinctrl-names = "default";
+
+		reset-gpios = <&tlmm 96 GPIO_ACTIVE_LOW>;
+
+		vdd-buck-supply = <&vreg_l20b_1p7>;
+		vdd-rxtx-supply = <&vreg_l21b_1p8>;
+		vdd-px-supply = <&vreg_l21b_1p8>;
+		vdd-mic-bias-supply = <&vph_pwr>;
+
+		qcom,mbhc-buttons-vthreshold-microvolt = <75000 150000 237000 500000 500000 500000 500000 500000>;
+
+		qcom,micbias1-microvolt = <2700000>;
+		qcom,micbias2-microvolt = <2700000>;
+		qcom,micbias3-microvolt = <2700000>;
+
+		qcom,rx-device = <&wcd937x_rx>;
+		qcom,tx-device = <&wcd937x_tx>;
+
+		#sound-dai-cells = <1>;
+	};
+
+	sound: sound {
+		compatible = "qcom,sm8450-sndcard";
+		model = "Redmi-12-5G";
+
+		/* FS1599 speaker amplifier (analog input from the WCD AUX output, I2C controlled): DAPM powers it with the stream */
+		aux-devs = <&spk_amp>;
+
+		audio-routing = "Spk Amp IN", "AUX",
+				"IN1_HPHL", "HPHL_OUT",
+				"IN2_HPHR", "HPHR_OUT",
+				"IN3_AUX", "AUX_OUT",
+				"AMIC1", "MIC BIAS1",
+				"AMIC2", "MIC BIAS2",
+				"AMIC3", "MIC BIAS3",
+				"TX SWR_INPUT0", "ADC2_OUTPUT",
+				"VA DMIC0", "VA MIC BIAS3",
+				"VA DMIC1", "VA MIC BIAS3";
+
+		wcd-playback-dai-link {
+			link-name = "WCD Playback";
+
+			cpu {
+				sound-dai = <&q6apmbedai RX_CODEC_DMA_RX_0>;
+			};
+
+			codec {
+				sound-dai = <&wcd9370 0>, <&swr1 0>, <&rxmacro 0>;
+			};
+
+			platform {
+				sound-dai = <&q6apm>;
+			};
+		};
+
+		wcd-capture-dai-link {
+			link-name = "WCD Capture";
+
+			cpu {
+				sound-dai = <&q6apmbedai TX_CODEC_DMA_TX_3>;
+			};
+
+			codec {
+				sound-dai = <&wcd9370 1>, <&swr2 0>, <&txmacro 0>;
+			};
+
+			platform {
+				sound-dai = <&q6apm>;
+			};
+		};
+
+		va-dai-link {
+			link-name = "VA Capture";
+
+			cpu {
+				sound-dai = <&q6apmbedai VA_CODEC_DMA_TX_0>;
+			};
+
+			codec {
+				sound-dai = <&vamacro 0>;
+			};
+
+			platform {
+				sound-dai = <&q6apm>;
+			};
+		};
+	};
+};
+
+&tlmm {
+	wcd_default: wcd-reset-n-active-state {
+		pins = "gpio96";
+		function = "gpio";
+		drive-strength = <16>;
+		bias-disable;
+	};
+};
+
+&swr1 {
+	wcd937x_rx: codec@0,4 {
+		compatible = "sdw20217010a00";
+		reg = <0 4>;
+		qcom,rx-port-mapping = <1 2 3 4 5>;
+	};
+};
+
+&swr2 {
+	wcd937x_tx: codec@0,3 {
+		compatible = "sdw20217010a00";
+		reg = <0 3>;
+		qcom,tx-port-mapping = <1 1 2 3>;
+	};
+};

@@ -1,0 +1,723 @@
+From: Andy Zhang and contributors (see kernel/third-party/README.md for imported parts)
+Subject: [PATCH 0004/8] Xiaomi sky DSI panel and KTD3136 backlight drivers
+
+panel-xiaomi-sky.c: DSI video-mode DSC panel written for this project (timings and init sequence read from the phone's own dtbo).
+ktd3136.c: KTD3136 backlight (I2C 0x36), imported from sky-linux (GPL-2.0).
+
+Apply with: git apply (from the root of a Linux 7.3 tree).
+---
+diff --git a/drivers/gpu/drm/panel/Kconfig b/drivers/gpu/drm/panel/Kconfig
+index cbdf7b8f7..d3832f66f 100644
+--- a/drivers/gpu/drm/panel/Kconfig
++++ b/drivers/gpu/drm/panel/Kconfig
+@@ -1352,6 +1352,17 @@ config DRM_PANEL_VISIONOX_G2647FB105
+ 	  Say Y here if you want to enable support for the Visionox
+ 	  G2647FB105 (2340x1080@60Hz) AMOLED DSI cmd mode panel.
+ 
++config DRM_PANEL_XIAOMI_SKY
++	tristate "Xiaomi Redmi 12 5G (sky) DSI DSC panel"
++	depends on OF
++	depends on DRM_MIPI_DSI
++	depends on BACKLIGHT_CLASS_DEVICE
++	select DRM_DISPLAY_DSC_HELPER
++	select DRM_DISPLAY_HELPER
++	help
++	  Say Y here if you want to enable support for the DSI video-mode
++	  DSC panel of the Xiaomi Redmi 12 5G (sky), panel m19_42_03_0b.
++
+ config DRM_PANEL_VISIONOX_R66451
+ 	tristate "Visionox R66451"
+ 	depends on OF
+diff --git a/drivers/gpu/drm/panel/Makefile b/drivers/gpu/drm/panel/Makefile
+index 3b523cf37..ec1c1dfa8 100644
+--- a/drivers/gpu/drm/panel/Makefile
++++ b/drivers/gpu/drm/panel/Makefile
+@@ -137,3 +137,4 @@ obj-$(CONFIG_DRM_PANEL_VISIONOX_VTDR6130) += panel-visionox-vtdr6130.o
+ obj-$(CONFIG_DRM_PANEL_VISIONOX_R66451) += panel-visionox-r66451.o
+ obj-$(CONFIG_DRM_PANEL_WIDECHIPS_WS2401) += panel-widechips-ws2401.o
+ obj-$(CONFIG_DRM_PANEL_XINPENG_XPP055C272) += panel-xinpeng-xpp055c272.o
++obj-$(CONFIG_DRM_PANEL_XIAOMI_SKY) += panel-xiaomi-sky.o
+diff --git a/drivers/gpu/drm/panel/panel-xiaomi-sky.c b/drivers/gpu/drm/panel/panel-xiaomi-sky.c
+new file mode 100644
+index 000000000..78d336e27
+--- /dev/null
++++ b/drivers/gpu/drm/panel/panel-xiaomi-sky.c
+@@ -0,0 +1,360 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * Redmi 12 5G (sky) DSI video-mode DSC panel, Xiaomi "m19_42_03_0b" (FHD+ 1080x2460, 90 Hz, 4 lanes).
++ * Written for this bring-up project; the structure follows panel-visionox-r66451.c (Linaro/Qualcomm).
++ * Timings, reset sequence, DSC parameters and DCS init/off sequences come from the phone's own dtbo
++ * (see docs/PANEL.md). Controller IC unconfirmed (FocalTech FT87xx family by command pattern).
++ */
++
++#include <linux/backlight.h>
++#include <linux/delay.h>
++#include <linux/gpio/consumer.h>
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/regulator/consumer.h>
++
++#include <drm/drm_mipi_dsi.h>
++#include <drm/drm_probe_helper.h>
++#include <drm/drm_modes.h>
++#include <drm/drm_panel.h>
++#include <drm/display/drm_dsc.h>
++#include <drm/display/drm_dsc_helper.h>
++
++#include <video/mipi_display.h>
++
++/* Generated from the sky dtbo panel node (private/dtbo-extract/panel-0b-sequences.txt). */
++struct sky_cmd {
++	u16 delay_ms;
++	u8 len;
++	u8 data[16];
++};
++static const struct sky_cmd sky_init_cmds[] = {
++	{ 0, 2, {0x00, 0x00} },
++	{ 0, 4, {0xff, 0x87, 0x20, 0x01} },
++	{ 0, 2, {0x00, 0x80} },
++	{ 0, 3, {0xff, 0x87, 0x20} },
++	{ 0, 2, {0x00, 0xb0} },
++	{ 0, 15, {0xb4, 0x00, 0x14, 0x02, 0x00, 0x01, 0xe8, 0x00, 0x07, 0x05, 0x0e, 0x05, 0x16, 0x10, 0xf0} },
++	{ 0, 2, {0x00, 0xb0} },
++	{ 0, 7, {0xca, 0x02, 0x02, 0x0b, 0x0f, 0xff, 0x08} },
++	{ 0, 2, {0x00, 0x80} },
++	{ 0, 13, {0xca, 0xe6, 0xd1, 0xc0, 0xb4, 0xaa, 0xa1, 0x9a, 0x94, 0x8f, 0x8a, 0x86, 0x82} },
++	{ 0, 2, {0x00, 0x90} },
++	{ 0, 10, {0xca, 0xfe, 0xff, 0x66, 0xf5, 0xff, 0xad, 0xfa, 0xff, 0xd6} },
++	{ 0, 2, {0x00, 0xa0} },
++	{ 0, 4, {0xca, 0x06, 0x06, 0x07} },
++	{ 0, 2, {0x00, 0x00} },
++	{ 0, 4, {0xff, 0x00, 0x00, 0x00} },
++	{ 0, 2, {0x00, 0x80} },
++	{ 0, 3, {0xff, 0x00, 0x00} },
++	{ 0, 3, {0x51, 0xff, 0x0e} },
++	{ 0, 2, {0x55, 0x00} },
++	{ 0, 2, {0x53, 0x2c} },
++	{ 0, 2, {0x35, 0x00} },
++};
++static const struct sky_cmd sky_off_cmds[] = {
++	{ 0, 2, {0x00, 0x00} },
++	{ 0, 4, {0xff, 0x87, 0x20, 0x01} },
++	{ 0, 2, {0x00, 0x80} },
++	{ 0, 3, {0xff, 0x87, 0x20} },
++	{ 35, 1, {0x28} },
++	{ 150, 1, {0x10} },
++	{ 0, 2, {0x00, 0x00} },
++	{ 0, 5, {0xf7, 0x5a, 0xa5, 0x95, 0x27} },
++	{ 0, 2, {0x00, 0x00} },
++	{ 0, 4, {0xff, 0x00, 0x00, 0x00} },
++	{ 0, 2, {0x00, 0x80} },
++	{ 20, 3, {0xff, 0x00, 0x00} },
++};
++
++
++struct sky_panel {
++	struct drm_panel panel;
++	struct mipi_dsi_device *dsi;
++	struct gpio_desc *reset_gpio;
++	struct regulator_bulk_data supplies[3];
++};
++
++static inline struct sky_panel *to_sky_panel(struct drm_panel *panel)
++{
++	return container_of(panel, struct sky_panel, panel);
++}
++
++/* bring-up knob: send every vendor command as a DCS long write (dtype 0x39) like the vendor driver does */
++static bool long_writes = true;
++module_param(long_writes, bool, 0644);
++MODULE_PARM_DESC(long_writes, "send init/off commands as DCS long writes (0x39)");
++
++static int sky_send_cmds(struct sky_panel *ctx, const struct sky_cmd *cmds, size_t n)
++{
++	struct mipi_dsi_multi_context dsi_ctx = { .dsi = ctx->dsi };
++	size_t i;
++
++	for (i = 0; i < n; i++) {
++		if (long_writes && cmds[i].len > 1) {
++			struct mipi_dsi_msg msg = {
++				.channel = ctx->dsi->channel,
++				.type = MIPI_DSI_DCS_LONG_WRITE,
++				.tx_buf = cmds[i].data,
++				.tx_len = cmds[i].len,
++				.flags = (ctx->dsi->mode_flags & MIPI_DSI_MODE_LPM) ? MIPI_DSI_MSG_USE_LPM : 0,
++			};
++			ssize_t r = ctx->dsi->host->ops->transfer(ctx->dsi->host, &msg);
++
++			if (r < 0 && !dsi_ctx.accum_err)
++				dsi_ctx.accum_err = r;
++		} else if (cmds[i].len == 1)
++			mipi_dsi_dcs_write_buffer_multi(&dsi_ctx, cmds[i].data, 1);
++		else
++			mipi_dsi_dcs_write_buffer_multi(&dsi_ctx, cmds[i].data, cmds[i].len);
++		if (cmds[i].delay_ms)
++			mipi_dsi_msleep(&dsi_ctx, cmds[i].delay_ms);
++	}
++
++	return dsi_ctx.accum_err;
++}
++
++/* vendor reset sequence <0 1 1 4 0 1 1 12>: low 1 ms, high 4 ms, low 1 ms, high 12 ms (reset-gpios is active low) */
++static void sky_reset(struct sky_panel *ctx)
++{
++	gpiod_set_value_cansleep(ctx->reset_gpio, 1);
++	usleep_range(1000, 1100);
++	gpiod_set_value_cansleep(ctx->reset_gpio, 0);
++	usleep_range(4000, 4100);
++	gpiod_set_value_cansleep(ctx->reset_gpio, 1);
++	usleep_range(1000, 1100);
++	gpiod_set_value_cansleep(ctx->reset_gpio, 0);
++	usleep_range(12000, 12100);
++}
++
++static int sky_prepare(struct drm_panel *panel)
++{
++	struct sky_panel *ctx = to_sky_panel(panel);
++	struct mipi_dsi_device *dsi = ctx->dsi;
++	struct drm_dsc_picture_parameter_set pps;
++	struct mipi_dsi_multi_context dsi_ctx = { .dsi = dsi };
++	int ret;
++
++	if (!dsi->dsc) {
++		dev_err(&dsi->dev, "DSC not attached to DSI\n");
++		return -ENODEV;
++	}
++
++	ret = regulator_bulk_enable(ARRAY_SIZE(ctx->supplies), ctx->supplies);
++	if (ret < 0) {
++		dev_err(&dsi->dev, "Failed to enable regulators: %d\n", ret);
++		return ret;
++	}
++	msleep(10);
++
++	sky_reset(ctx);
++
++	dsi->mode_flags |= MIPI_DSI_MODE_LPM;
++
++	drm_dsc_pps_payload_pack(&pps, dsi->dsc);
++	mipi_dsi_picture_parameter_set_multi(&dsi_ctx, &pps);
++	ret = dsi_ctx.accum_err;
++
++	if (!ret)
++		ret = sky_send_cmds(ctx, sky_init_cmds, ARRAY_SIZE(sky_init_cmds));
++
++	if (!ret) {
++		mipi_dsi_dcs_exit_sleep_mode_multi(&dsi_ctx);
++		mipi_dsi_msleep(&dsi_ctx, 120);
++		ret = dsi_ctx.accum_err;
++	}
++
++	if (ret) {
++		dev_err(&dsi->dev, "panel init failed: %d\n", ret);
++		gpiod_set_value_cansleep(ctx->reset_gpio, 1);
++		regulator_bulk_disable(ARRAY_SIZE(ctx->supplies), ctx->supplies);
++	}
++
++	return ret;
++}
++
++/* bring-up diagnostics: read back standard DCS status registers (needs working BTA) */
++static void sky_dump_status(struct sky_panel *ctx)
++{
++	static const u8 regs[] = { 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0xda, 0xdb, 0xdc };
++	struct mipi_dsi_device *dsi = ctx->dsi;
++	size_t i;
++
++	for (i = 0; i < ARRAY_SIZE(regs); i++) {
++		u8 v = 0xee;
++		ssize_t r = mipi_dsi_dcs_read(dsi, regs[i], &v, 1);
++
++		dev_info(&dsi->dev, "DCS read 0x%02x -> ret %zd val 0x%02x\n", regs[i], r, v);
++	}
++}
++
++static int sky_enable(struct drm_panel *panel)
++{
++	struct sky_panel *ctx = to_sky_panel(panel);
++	struct mipi_dsi_multi_context dsi_ctx = { .dsi = ctx->dsi };
++
++	mipi_dsi_dcs_set_display_on_multi(&dsi_ctx);
++	sky_dump_status(ctx);
++	return dsi_ctx.accum_err;
++}
++
++static int sky_disable(struct drm_panel *panel)
++{
++	struct sky_panel *ctx = to_sky_panel(panel);
++
++	/* vendor off sequence: includes display-off (35 ms) and sleep-in (150 ms) */
++	return sky_send_cmds(ctx, sky_off_cmds, ARRAY_SIZE(sky_off_cmds));
++}
++
++static int sky_unprepare(struct drm_panel *panel)
++{
++	struct sky_panel *ctx = to_sky_panel(panel);
++
++	gpiod_set_value_cansleep(ctx->reset_gpio, 1);
++	regulator_bulk_disable(ARRAY_SIZE(ctx->supplies), ctx->supplies);
++	return 0;
++}
++
++/* 1080+76+8+56 = 1220 x 2460+10+10+20 = 2500 at 90 Hz -> 274500 kHz (dtbo timing@0) */
++static const struct drm_display_mode sky_mode = {
++	.clock = 274500,
++	.hdisplay = 1080,
++	.hsync_start = 1080 + 76,
++	.hsync_end = 1080 + 76 + 8,
++	.htotal = 1080 + 76 + 8 + 56,
++	.vdisplay = 2460,
++	.vsync_start = 2460 + 10,
++	.vsync_end = 2460 + 10 + 10,
++	.vtotal = 2460 + 10 + 10 + 20,
++	.width_mm = 69,
++	.height_mm = 158,
++	.type = DRM_MODE_TYPE_DRIVER | DRM_MODE_TYPE_PREFERRED,
++};
++
++static int sky_get_modes(struct drm_panel *panel, struct drm_connector *connector)
++{
++	drm_connector_helper_get_modes_fixed(connector, &sky_mode);
++	return 1;
++}
++
++static const struct drm_panel_funcs sky_funcs = {
++	.prepare = sky_prepare,
++	.unprepare = sky_unprepare,
++	.enable = sky_enable,
++	.disable = sky_disable,
++	.get_modes = sky_get_modes,
++};
++
++static int sky_bl_update_status(struct backlight_device *bl)
++{
++	struct mipi_dsi_device *dsi = bl_get_data(bl);
++	u16 brightness = backlight_get_brightness(bl);
++
++	return mipi_dsi_dcs_set_display_brightness(dsi, brightness);
++}
++
++static const struct backlight_ops sky_bl_ops = {
++	.update_status = sky_bl_update_status,
++};
++
++static struct backlight_device *sky_create_backlight(struct mipi_dsi_device *dsi)
++{
++	struct device *dev = &dsi->dev;
++	/* 12-bit DCS brightness via 0x51 (vendor init writes 0x0eff); the maximum is an assumption. */
++	const struct backlight_properties props = {
++		.type = BACKLIGHT_RAW,
++		.brightness = 0xeff,
++		.max_brightness = 0xfff,
++	};
++
++	return devm_backlight_device_register(dev, dev_name(dev), dev, dsi, &sky_bl_ops, &props);
++}
++
++static int sky_probe(struct mipi_dsi_device *dsi)
++{
++	struct device *dev = &dsi->dev;
++	struct sky_panel *ctx;
++	struct drm_dsc_config *dsc;
++	int ret;
++
++	ctx = devm_drm_panel_alloc(dev, struct sky_panel, panel, &sky_funcs, DRM_MODE_CONNECTOR_DSI);
++	if (IS_ERR(ctx))
++		return PTR_ERR(ctx);
++
++	dsc = devm_kzalloc(dev, sizeof(*dsc), GFP_KERNEL);
++	if (!dsc)
++		return -ENOMEM;
++
++	/* dtbo: bpc 8, bpp 8, slice 540x20, slice-per-pkt 2, block prediction. DSC version assumed 1.1. */
++	dsc->dsc_version_major = 1;
++	dsc->dsc_version_minor = 1;
++	dsc->slice_height = 20;
++	dsc->slice_width = 540;
++	dsc->slice_count = 2;
++	dsc->bits_per_component = 8;
++	dsc->bits_per_pixel = 8 << 4;
++	dsc->block_pred_enable = true;
++	dsi->dsc = dsc;
++
++	ctx->supplies[0].supply = "vddio";
++	ctx->supplies[1].supply = "extvdd";
++	ctx->supplies[2].supply = "avdd";
++	ret = devm_regulator_bulk_get(dev, ARRAY_SIZE(ctx->supplies), ctx->supplies);
++	if (ret < 0)
++		return dev_err_probe(dev, ret, "Failed to get regulators\n");
++
++	ctx->reset_gpio = devm_gpiod_get(dev, "reset", GPIOD_OUT_HIGH);
++	if (IS_ERR(ctx->reset_gpio))
++		return dev_err_probe(dev, PTR_ERR(ctx->reset_gpio), "Failed to get reset-gpios\n");
++
++	ctx->dsi = dsi;
++	mipi_dsi_set_drvdata(dsi, ctx);
++
++	dsi->lanes = 4;
++	dsi->format = MIPI_DSI_FMT_RGB888;
++	dsi->mode_flags = MIPI_DSI_MODE_VIDEO | MIPI_DSI_MODE_VIDEO_BURST | MIPI_DSI_MODE_NO_EOT_PACKET |
++			  MIPI_DSI_MODE_LPM | MIPI_DSI_MODE_DSC_ALL_SLICES_IN_PKT;
++	ctx->panel.prepare_prev_first = true;
++
++	/* brightness: the panel's DCS 0x51 does nothing visible on this LCD; the KTD3136 I2C backlight drives it */
++	drm_panel_add(&ctx->panel);
++
++	ret = mipi_dsi_attach(dsi);
++	if (ret < 0) {
++		dev_err(dev, "Failed to attach to DSI host: %d\n", ret);
++		drm_panel_remove(&ctx->panel);
++	}
++
++	return ret;
++}
++
++static void sky_remove(struct mipi_dsi_device *dsi)
++{
++	struct sky_panel *ctx = mipi_dsi_get_drvdata(dsi);
++	int ret;
++
++	ret = mipi_dsi_detach(dsi);
++	if (ret < 0)
++		dev_err(&dsi->dev, "Failed to detach from DSI host: %d\n", ret);
++
++	drm_panel_remove(&ctx->panel);
++}
++
++static const struct of_device_id sky_of_match[] = {
++	{ .compatible = "xiaomi,sky-m19-42-03-0b" },
++	{ /* sentinel */ }
++};
++MODULE_DEVICE_TABLE(of, sky_of_match);
++
++static struct mipi_dsi_driver sky_driver = {
++	.probe = sky_probe,
++	.remove = sky_remove,
++	.driver = {
++		.name = "panel-xiaomi-sky",
++		.of_match_table = sky_of_match,
++	},
++};
++module_mipi_dsi_driver(sky_driver);
++
++MODULE_DESCRIPTION("Xiaomi Redmi 12 5G m19_42_03_0b DSI DSC panel driver (bring-up)");
++MODULE_LICENSE("GPL");
+diff --git a/drivers/video/backlight/Kconfig b/drivers/video/backlight/Kconfig
+index dbf4ca23a..d6f496a30 100644
+--- a/drivers/video/backlight/Kconfig
++++ b/drivers/video/backlight/Kconfig
+@@ -191,6 +191,13 @@ config BACKLIGHT_KTD253
+ 	  which is a 1-wire GPIO-controlled backlight found in some mobile
+ 	  phones.
+ 
++config BACKLIGHT_KTD3136
++	tristate "Backlight Driver for Kinetic KTD3136 (I2C)"
++	depends on I2C && REGMAP_I2C
++	help
++	  Backlight driver for the Kinetic KTD3136 as found on the Redmi 12 5G
++	  (imported from sky-linux, bring-up quality).
++
+ config BACKLIGHT_KTD2801
+ 	tristate "Backlight Driver for Kinetic KTD2801"
+ 	depends on GPIOLIB
+diff --git a/drivers/video/backlight/Makefile b/drivers/video/backlight/Makefile
+index 34469711c..39948b049 100644
+--- a/drivers/video/backlight/Makefile
++++ b/drivers/video/backlight/Makefile
+@@ -64,3 +64,4 @@ obj-$(CONFIG_BACKLIGHT_WM831X)		+= wm831x_bl.o
+ obj-$(CONFIG_BACKLIGHT_ARCXCNN) 	+= arcxcnn_bl.o
+ obj-$(CONFIG_BACKLIGHT_RAVE_SP)		+= rave-sp-backlight.o
+ obj-$(CONFIG_BACKLIGHT_LED)		+= led_bl.o
++obj-$(CONFIG_BACKLIGHT_KTD3136)	+= ktd3136.o
+diff --git a/drivers/video/backlight/ktd3136.c b/drivers/video/backlight/ktd3136.c
+new file mode 100644
+index 000000000..c82889711
+--- /dev/null
++++ b/drivers/video/backlight/ktd3136.c
+@@ -0,0 +1,285 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * Imported from sky-linux (orange200213, GPL-2.0), kernel/drivers/backlight/ktd3136.c;
++ * local changes tracked in kernel-local/linux-7.3-local.diff.
++ *
++ * Kinetic KTD3136 / KTD3137 I2C backlight (ginkgo / Redmi Note 8).
++ *
++ * Hardware: PMI632 GPIO6 = HWEN, QUPV3 SE1 I2C @ 0x36.
++ * Some units populate TI LM3697 at the same address; detect via ID 0x00.
++ *
++ * PWM Register 0x06 bit7 is inverted: 0 enables PWM dimming. Downstream
++ * leaves PWM on and feeds PM6125 LPG. Without that PWM the LED current
++ * stays at 0, so this driver disables PWM and uses the 11-bit I2C ratio.
++ */
++
++#include <linux/backlight.h>
++#include <linux/delay.h>
++#include <linux/err.h>
++#include <linux/gpio/consumer.h>
++#include <linux/i2c.h>
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/regmap.h>
++
++#define KTD3136_REG_ID		0x00
++#define KTD3136_REG_MODE	0x02
++#define KTD3136_REG_CONTROL	0x03
++#define KTD3136_REG_RATIO_LSB	0x04
++#define KTD3136_REG_RATIO_MSB	0x05
++#define KTD3136_REG_PWM		0x06
++
++#define KTD3136_ID		0x18
++#define KTD3136_MODE_ON		0xc9	/* ILED_FS=20.2mA+, BL enable */
++#define KTD3136_MODE_OFF	0x98	/* downstream off value */
++#define KTD3136_CTRL_LINEAR	BIT(1)
++#define KTD3136_PWM_DISABLE	0x9b	/* PWM off, CH1+CH2 like 0x1b */
++
++/* TI LM3697 BRT_A: 0x22 = LSB[2:0], 0x23 = MSB[7:0] (the imported driver had these swapped, E006) */
++#define LM3697_REG_BRT_LSB	0x22
++#define LM3697_REG_BRT_MSB	0x23
++
++#define KTD3136_MAX_BRIGHTNESS	2047
++#define KTD3136_DEFAULT_BRIGHTNESS 1024
++
++enum ktd3136_ic {
++	IC_KTD3136,
++	IC_LM3697,
++};
++
++struct ktd3136 {
++	struct i2c_client *client;
++	struct regmap *regmap;
++	struct gpio_desc *enable_gpio;
++	enum ktd3136_ic ic;
++};
++
++static const struct regmap_config ktd3136_regmap_config = {
++	.reg_bits = 8,
++	.val_bits = 8,
++	.max_register = 0x24,
++};
++
++static int ktd3136_write(struct ktd3136 *ktd, unsigned int reg, unsigned int val)
++{
++	return regmap_write(ktd->regmap, reg, val);
++}
++
++static int ktd3136_set_ktd(struct ktd3136 *ktd, unsigned int brightness)
++{
++	int ret;
++
++	if (!brightness)
++		return ktd3136_write(ktd, KTD3136_REG_MODE, KTD3136_MODE_OFF);
++
++	ret = ktd3136_write(ktd, KTD3136_REG_MODE, KTD3136_MODE_ON);
++	if (ret)
++		return ret;
++
++	/* LSB must be programmed first; MSB latches the 11-bit value. */
++	ret = ktd3136_write(ktd, KTD3136_REG_RATIO_LSB, brightness & 0x7);
++	if (ret)
++		return ret;
++
++	return ktd3136_write(ktd, KTD3136_REG_RATIO_MSB, (brightness >> 3) & 0xff);
++}
++
++static int ktd3136_init_lm3697(struct ktd3136 *ktd);
++
++static int ktd3136_set_lm3697(struct ktd3136 *ktd, unsigned int brightness)
++{
++	int ret;
++
++	if (!brightness)
++		return ktd3136_write(ktd, 0x24, 0x00);
++
++	/*
++	 * Probe runs before LCDB/panel power. The first brightness write
++	 * is lost; a later sysfs echo is what testers used to turn the
++	 * backlight on. Re-init on every non-zero update.
++	 */
++	ret = ktd3136_init_lm3697(ktd);
++	if (ret)
++		return ret;
++
++	/* LSB then MSB; the 11-bit code latches on the MSB write. */
++	ret = ktd3136_write(ktd, LM3697_REG_BRT_LSB, brightness & 0x7);
++	if (ret)
++		return ret;
++
++	ret = ktd3136_write(ktd, LM3697_REG_BRT_MSB, (brightness >> 3) & 0xff);
++	if (ret)
++		return ret;
++
++	return ktd3136_write(ktd, 0x24, 0x02);
++}
++
++static int ktd3136_update_status(struct backlight_device *bl)
++{
++	struct ktd3136 *ktd = bl_get_data(bl);
++	unsigned int brightness = backlight_get_brightness(bl);
++
++	if (ktd->ic == IC_KTD3136)
++		return ktd3136_set_ktd(ktd, brightness);
++
++	return ktd3136_set_lm3697(ktd, brightness);
++}
++
++static const struct backlight_ops ktd3136_ops = {
++	.options = BL_CORE_SUSPENDRESUME,
++	.update_status = ktd3136_update_status,
++};
++
++static int ktd3136_init_ktd(struct ktd3136 *ktd)
++{
++	int ret;
++	unsigned int val;
++
++	/* Downstream: 0x06=0x1b (PWM still enabled). Disable PWM for I2C-only. */
++	ret = ktd3136_write(ktd, KTD3136_REG_PWM, KTD3136_PWM_DISABLE);
++	if (ret)
++		return ret;
++
++	ret = regmap_update_bits(ktd->regmap, KTD3136_REG_CONTROL,
++				 KTD3136_CTRL_LINEAR, KTD3136_CTRL_LINEAR);
++	if (ret)
++		return ret;
++
++	ret = ktd3136_write(ktd, KTD3136_REG_MODE, KTD3136_MODE_ON);
++	if (ret)
++		return ret;
++
++	ret = regmap_read(ktd->regmap, KTD3136_REG_MODE, &val);
++	if (!ret)
++		dev_info(&ktd->client->dev, "KTD3136 mode=0x%02x pwm=0x%02x\n",
++			 val, KTD3136_PWM_DISABLE);
++
++	return 0;
++}
++
++static int ktd3136_init_lm3697(struct ktd3136 *ktd)
++{
++	static const u8 init[][2] = {
++		{ 0x10, 0x03 },
++		/*
++		 * Values read from this phone's Android (/proc/ktd3136_backlight/backlight_ic_info at
++		 * maximum brightness, E019); the imported ginkgo table left the maximum visibly dim.
++		 * The panel LEDs are on bank B (0x22/0x23); Android enables only bank B (0x24=0x02).
++		 */
++		{ 0x13, 0x11 },
++		{ 0x16, 0x00 },
++		{ 0x17, 0x13 },
++		{ 0x18, 0x13 },
++		{ 0x19, 0x03 },
++		{ 0x1a, 0x0e },
++		{ 0x1c, 0x0e },
++		{ 0x24, 0x02 },
++	};
++	int i, ret;
++
++	for (i = 0; i < ARRAY_SIZE(init); i++) {
++		ret = ktd3136_write(ktd, init[i][0], init[i][1]);
++		if (ret)
++			return ret;
++	}
++
++	return 0;
++}
++
++static int ktd3136_probe(struct i2c_client *client)
++{
++	struct device *dev = &client->dev;
++	struct backlight_device *bl;
++	struct backlight_properties props;
++	struct ktd3136 *ktd;
++	unsigned int id = 0, brightness = KTD3136_DEFAULT_BRIGHTNESS;
++	int ret;
++
++	ktd = devm_kzalloc(dev, sizeof(*ktd), GFP_KERNEL);
++	if (!ktd)
++		return -ENOMEM;
++
++	ktd->client = client;
++	ktd->regmap = devm_regmap_init_i2c(client, &ktd3136_regmap_config);
++	if (IS_ERR(ktd->regmap))
++		return dev_err_probe(dev, PTR_ERR(ktd->regmap), "regmap\n");
++
++	ktd->enable_gpio = devm_gpiod_get_optional(dev, "enable", GPIOD_OUT_HIGH);
++	if (IS_ERR(ktd->enable_gpio))
++		return dev_err_probe(dev, PTR_ERR(ktd->enable_gpio),
++				     "enable gpio\n");
++
++	/* HWEN must be high before I2C is valid. */
++	usleep_range(10000, 12000);
++
++	ret = regmap_read(ktd->regmap, KTD3136_REG_ID, &id);
++	if (ret)
++		return dev_err_probe(dev, ret, "read device id @0x00\n");
++
++	if (id == KTD3136_ID) {
++		ktd->ic = IC_KTD3136;
++		ret = ktd3136_init_ktd(ktd);
++	} else {
++		ktd->ic = IC_LM3697;
++		dev_info(dev, "id=0x%02x, treating as LM3697\n", id);
++		ret = ktd3136_init_lm3697(ktd);
++	}
++	if (ret)
++		return dev_err_probe(dev, ret, "chip init\n");
++
++	device_property_read_u32(dev, "default-brightness", &brightness);
++	if (brightness > KTD3136_MAX_BRIGHTNESS)
++		brightness = KTD3136_MAX_BRIGHTNESS;
++
++	memset(&props, 0, sizeof(props));
++	props.type = BACKLIGHT_RAW;
++	props.max_brightness = KTD3136_MAX_BRIGHTNESS;
++	props.brightness = brightness;
++	props.scale = BACKLIGHT_SCALE_LINEAR;
++
++	bl = devm_backlight_device_register(dev, "ktd3136-backlight", dev, ktd,
++					    &ktd3136_ops, &props);
++	if (IS_ERR(bl))
++		return dev_err_probe(dev, PTR_ERR(bl), "backlight register\n");
++
++	i2c_set_clientdata(client, bl);
++	backlight_update_status(bl);
++
++	dev_info(dev, "probed id=0x%02x brightness=%u\n", id, brightness);
++	return 0;
++}
++
++static void ktd3136_remove(struct i2c_client *client)
++{
++	struct backlight_device *bl = i2c_get_clientdata(client);
++
++	bl->props.brightness = 0;
++	backlight_update_status(bl);
++}
++
++static const struct i2c_device_id ktd3136_ids[] = {
++	{ "ktd3136" },
++	{}
++};
++MODULE_DEVICE_TABLE(i2c, ktd3136_ids);
++
++static const struct of_device_id ktd3136_of_match[] = {
++	{ .compatible = "kinetic,ktd3136" },
++	{ .compatible = "ktd,ktd3136" },
++	{}
++};
++MODULE_DEVICE_TABLE(of, ktd3136_of_match);
++
++static struct i2c_driver ktd3136_driver = {
++	.driver = {
++		.name = "ktd3136",
++		.of_match_table = ktd3136_of_match,
++	},
++	.probe = ktd3136_probe,
++	.remove = ktd3136_remove,
++	.id_table = ktd3136_ids,
++};
++module_i2c_driver(ktd3136_driver);
++
++MODULE_DESCRIPTION("Kinetic KTD3136 backlight driver");
++MODULE_LICENSE("GPL");

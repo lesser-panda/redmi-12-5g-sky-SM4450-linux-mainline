@@ -1,0 +1,412 @@
+From: Andy Zhang and contributors (see kernel/third-party/README.md for imported parts)
+Subject: [PATCH 0008/8] Battery manager charge limit and dwc3-qcom resume fix
+
+qcom_battmgr: software charge limit (80/75 % hysteresis) through the Xiaomi input_suspend, USB input-current limit, adapter type.
+dwc3-qcom: re-apply the UTMI-as-pipe-clock selection on resume.
+Some parts from ROCKNIX (0051/0052/0054), the charge limit and the resume fix are this project's.
+
+Apply with: git apply (from the root of a Linux 7.3 tree).
+---
+diff --git a/drivers/power/supply/qcom_battmgr.c b/drivers/power/supply/qcom_battmgr.c
+index 7716eb9e1..949e37643 100644
+--- a/drivers/power/supply/qcom_battmgr.c
++++ b/drivers/power/supply/qcom_battmgr.c
+@@ -334,6 +334,14 @@ struct qcom_battmgr {
+ 
+ 	struct work_struct enable_work;
+ 
++	/* sky (local): software charge limit through the Xiaomi input_suspend property, see qcom_battmgr_xm_limit_work() */
++	bool xm_limit;
++	bool xm_suspended;
++	bool xm_first;
++	unsigned int xm_start;
++	unsigned int xm_end;
++	struct delayed_work xm_work;
++
+ 	/*
+ 	 * @lock is used to prevent concurrent power supply requests to the
+ 	 * firmware, as it then stops responding.
+@@ -426,6 +434,9 @@ static int qcom_battmgr_update_discharge_time(struct qcom_battmgr *battmgr)
+ 	return qcom_battmgr_request(battmgr, &request, sizeof(request));
+ }
+ 
++static void qcom_battmgr_xm_kick(struct qcom_battmgr *battmgr, unsigned long delay);
++static int qcom_battmgr_xm_set_threshold(struct qcom_battmgr *battmgr, bool end, int val);
++
+ static const u8 sm8350_bat_prop_map[] = {
+ 	[POWER_SUPPLY_PROP_STATUS] = BATT_STATUS,
+ 	[POWER_SUPPLY_PROP_HEALTH] = BATT_HEALTH,
+@@ -520,6 +531,15 @@ static int qcom_battmgr_bat_get_property(struct power_supply *psy,
+ 	if (!battmgr->service_up)
+ 		return -EAGAIN;
+ 
++	if (battmgr->xm_limit && psp == POWER_SUPPLY_PROP_CHARGE_CONTROL_START_THRESHOLD) {
++		val->intval = battmgr->xm_start;
++		return 0;
++	}
++	if (battmgr->xm_limit && psp == POWER_SUPPLY_PROP_CHARGE_CONTROL_END_THRESHOLD) {
++		val->intval = battmgr->xm_end;
++		return 0;
++	}
++
+ 	if (battmgr->variant == QCOM_BATTMGR_SC8280XP ||
+ 	    battmgr->variant == QCOM_BATTMGR_X1E80100)
+ 		ret = qcom_battmgr_bat_sc8280xp_update(battmgr, psp);
+@@ -679,6 +699,9 @@ static int qcom_battmgr_set_charge_start_threshold(struct qcom_battmgr *battmgr,
+ 	u32 target_soc, delta_soc;
+ 	int ret;
+ 
++	if (battmgr->xm_limit)
++		return qcom_battmgr_xm_set_threshold(battmgr, false, start_soc);
++
+ 	start_soc = clamp(start_soc, CHARGE_CTRL_START_THR_MIN, CHARGE_CTRL_START_THR_MAX);
+ 
+ 	/*
+@@ -712,6 +735,9 @@ static int qcom_battmgr_set_charge_end_threshold(struct qcom_battmgr *battmgr, i
+ 	u32 delta_soc = CHARGE_CTRL_DELTA_SOC;
+ 	int ret;
+ 
++	if (battmgr->xm_limit)
++		return qcom_battmgr_xm_set_threshold(battmgr, true, end_soc);
++
+ 	end_soc = clamp(end_soc, CHARGE_CTRL_END_THR_MIN, CHARGE_CTRL_END_THR_MAX);
+ 
+ 	if (battmgr->info.charge_ctrl_start && end_soc > battmgr->info.charge_ctrl_start)
+@@ -819,7 +845,7 @@ static const enum power_supply_property sc8280xp_bat_props[] = {
+ };
+ 
+ static const struct power_supply_desc sc8280xp_bat_psy_desc = {
+-	.name = "qcom-battmgr-bat",
++	.name = "battery",
+ 	.type = POWER_SUPPLY_TYPE_BATTERY,
+ 	.properties = sc8280xp_bat_props,
+ 	.num_properties = ARRAY_SIZE(sc8280xp_bat_props),
+@@ -854,7 +880,7 @@ static const enum power_supply_property x1e80100_bat_props[] = {
+ };
+ 
+ static const struct power_supply_desc x1e80100_bat_psy_desc = {
+-	.name = "qcom-battmgr-bat",
++	.name = "battery",
+ 	.type = POWER_SUPPLY_TYPE_BATTERY,
+ 	.properties = x1e80100_bat_props,
+ 	.num_properties = ARRAY_SIZE(x1e80100_bat_props),
+@@ -888,7 +914,7 @@ static const enum power_supply_property sm8350_bat_props[] = {
+ };
+ 
+ static const struct power_supply_desc sm8350_bat_psy_desc = {
+-	.name = "qcom-battmgr-bat",
++	.name = "battery",
+ 	.type = POWER_SUPPLY_TYPE_BATTERY,
+ 	.properties = sm8350_bat_props,
+ 	.num_properties = ARRAY_SIZE(sm8350_bat_props),
+@@ -922,7 +948,7 @@ static const enum power_supply_property sm8550_bat_props[] = {
+ };
+ 
+ static const struct power_supply_desc sm8550_bat_psy_desc = {
+-	.name = "qcom-battmgr-bat",
++	.name = "battery",
+ 	.type = POWER_SUPPLY_TYPE_BATTERY,
+ 	.properties = sm8550_bat_props,
+ 	.num_properties = ARRAY_SIZE(sm8550_bat_props),
+@@ -975,7 +1001,7 @@ static const u8 sm8350_usb_prop_map[] = {
+ 	[POWER_SUPPLY_PROP_CURRENT_NOW] = USB_CURR_NOW,
+ 	[POWER_SUPPLY_PROP_CURRENT_MAX] = USB_CURR_MAX,
+ 	[POWER_SUPPLY_PROP_INPUT_CURRENT_LIMIT] = USB_INPUT_CURR_LIMIT,
+-	[POWER_SUPPLY_PROP_USB_TYPE] = USB_TYPE,
++	[POWER_SUPPLY_PROP_USB_TYPE] = USB_ADAP_TYPE,
+ };
+ 
+ static int qcom_battmgr_usb_sm8350_update(struct qcom_battmgr *battmgr,
+@@ -1043,6 +1069,35 @@ static int qcom_battmgr_usb_get_property(struct power_supply *psy,
+ 	return 0;
+ }
+ 
++static int qcom_battmgr_usb_set_property(struct power_supply *psy,
++					 enum power_supply_property psp,
++					 const union power_supply_propval *val)
++{
++	struct qcom_battmgr *battmgr = power_supply_get_drvdata(psy);
++	int ret;
++
++	if (!battmgr->service_up)
++		return -EAGAIN;
++
++	if (psp != POWER_SUPPLY_PROP_INPUT_CURRENT_LIMIT)
++		return -EINVAL;
++
++	mutex_lock(&battmgr->lock);
++	ret = qcom_battmgr_request_property(battmgr, BATTMGR_USB_PROPERTY_SET,
++					    USB_INPUT_CURR_LIMIT, val->intval);
++	if (!ret)
++		battmgr->usb.current_limit = val->intval;
++	mutex_unlock(&battmgr->lock);
++
++	return ret;
++}
++
++static int qcom_battmgr_usb_is_writeable(struct power_supply *psy,
++					 enum power_supply_property psp)
++{
++	return psp == POWER_SUPPLY_PROP_INPUT_CURRENT_LIMIT;
++}
++
+ static const enum power_supply_property sc8280xp_usb_props[] = {
+ 	POWER_SUPPLY_PROP_ONLINE,
+ };
+@@ -1081,6 +1136,8 @@ static const struct power_supply_desc sm8350_usb_psy_desc = {
+ 	.properties = sm8350_usb_props,
+ 	.num_properties = ARRAY_SIZE(sm8350_usb_props),
+ 	.get_property = qcom_battmgr_usb_get_property,
++	.set_property = qcom_battmgr_usb_set_property,
++	.property_is_writeable = qcom_battmgr_usb_is_writeable,
+ 	.usb_types = BIT(POWER_SUPPLY_USB_TYPE_UNKNOWN) |
+ 		     BIT(POWER_SUPPLY_USB_TYPE_SDP)     |
+ 		     BIT(POWER_SUPPLY_USB_TYPE_DCP)     |
+@@ -1210,9 +1267,11 @@ static void qcom_battmgr_notification(struct qcom_battmgr *battmgr,
+ 	case NOTIF_BAT_PROPERTY:
+ 	case NOTIF_BAT_CHARGING_STATE:
+ 		power_supply_changed(battmgr->bat_psy);
++		qcom_battmgr_xm_kick(battmgr, 2 * HZ);
+ 		break;
+ 	case NOTIF_USB_PROPERTY:
+ 		power_supply_changed(battmgr->usb_psy);
++		qcom_battmgr_xm_kick(battmgr, 2 * HZ);
+ 		break;
+ 	case NOTIF_WLS_PROPERTY:
+ 		power_supply_changed(battmgr->wls_psy);
+@@ -1513,8 +1572,11 @@ static void qcom_battmgr_sm8350_callback(struct qcom_battmgr *battmgr,
+ 		case USB_INPUT_CURR_LIMIT:
+ 			battmgr->usb.current_limit = le32_to_cpu(resp->intval.value);
+ 			break;
+-		case USB_TYPE:
+-			battmgr->usb.usb_type = le32_to_cpu(resp->intval.value);
++		case USB_ADAP_TYPE:
++			val = le32_to_cpu(resp->intval.value);
++			if (val > POWER_SUPPLY_USB_TYPE_APPLE_BRICK_ID)
++				val = POWER_SUPPLY_USB_TYPE_UNKNOWN;
++			battmgr->usb.usb_type = val;
+ 			break;
+ 		default:
+ 			dev_warn(battmgr->dev, "unknown property %#x\n", property);
+@@ -1558,6 +1620,7 @@ static void qcom_battmgr_sm8350_callback(struct qcom_battmgr *battmgr,
+ 		break;
+ 	case BATTMGR_REQUEST_NOTIFICATION:
+ 	case BATTMGR_CHG_CTRL_LIMIT_EN:
++	case BATTMGR_USB_PROPERTY_SET:
+ 		battmgr->error = 0;
+ 		break;
+ 	default:
+@@ -1606,6 +1669,8 @@ static void qcom_battmgr_pdr_notify(void *priv, int state)
+ 	if (state == SERVREG_SERVICE_STATE_UP) {
+ 		battmgr->service_up = true;
+ 		schedule_work(&battmgr->enable_work);
++		battmgr->xm_first = true;
++		qcom_battmgr_xm_kick(battmgr, 3 * HZ);
+ 	} else {
+ 		battmgr->service_up = false;
+ 	}
+@@ -1624,6 +1689,125 @@ static const struct of_device_id qcom_battmgr_of_variants[] = {
+ 
+ static char *qcom_battmgr_battery[] = { "battery" };
+ 
++/*
++ * Local debug interface (E022, not for upstream as is): Xiaomi's charger firmware (this phone's ADSP) takes extra
++ * "xm" properties with opcode 0x51 (get 0x50). Android's vendor driver qti_battery_charger_main.ko sends
++ * {owner 0x800a, type 1, opcode 0x51, battery 0, property 3, value 0/1} for its `input_suspend` attribute.
++ * `echo "<prop> <value>" > /sys/bus/auxiliary/devices/pmic_glink.power-supply.0/xm_set` sends that request.
++ */
++#define XM_BATTMGR_PROPERTY_SET		0x51
++
++static ssize_t xm_set_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
++{
++	struct qcom_battmgr *battmgr = dev_get_drvdata(dev);
++	unsigned int prop, val;
++	int ret;
++
++	if (sscanf(buf, "%u %u", &prop, &val) != 2)
++		return -EINVAL;
++
++	mutex_lock(&battmgr->lock);
++	ret = qcom_battmgr_request_property(battmgr, XM_BATTMGR_PROPERTY_SET, prop, val);
++	mutex_unlock(&battmgr->lock);
++	dev_info(dev, "xm_set prop %u value %u -> %d\n", prop, val, ret);
++
++	/* the firmware's answer to an xm request is not a message this driver knows, so a timeout only means "no ack parsed" */
++	return (ret == 0 || ret == -ETIMEDOUT) ? count : ret;
++}
++static DEVICE_ATTR_WO(xm_set);
++
++/*
++ * sky (local, E031): software charge limit. This phone's charger firmware ignores the standard charge-control
++ * thresholds (they read back 0), so with the DT property "xiaomi,input-suspend-limit" the driver implements them
++ * itself: at capacity >= end it sets the Xiaomi `input_suspend` property (xm property 3), at capacity <= start it
++ * clears it. The firmware drops input_suspend when the charger is replugged, so while we think it is set but the
++ * battery reports Charging, it is set again. Evaluated on battery/USB notifications and every 60 s.
++ */
++#define XM_PROP_INPUT_SUSPEND		3
++#define XM_LIMIT_FLOOR			30
++#define XM_LIMIT_PERIOD			(60 * HZ)
++
++static void qcom_battmgr_xm_kick(struct qcom_battmgr *battmgr, unsigned long delay)
++{
++	/* does nothing if already queued, so a burst of notifications costs one evaluation */
++	if (battmgr->xm_limit && battmgr->service_up)
++		schedule_delayed_work(&battmgr->xm_work, delay);
++}
++
++static int qcom_battmgr_xm_set_threshold(struct qcom_battmgr *battmgr, bool end, int val)
++{
++	if (end) {
++		val = clamp(val, CHARGE_CTRL_END_THR_MIN, CHARGE_CTRL_END_THR_MAX);
++		battmgr->xm_end = val;
++		if (battmgr->xm_start >= val)
++			battmgr->xm_start = max(val - CHARGE_CTRL_DELTA_SOC, CHARGE_CTRL_START_THR_MIN);
++	} else {
++		val = clamp(val, CHARGE_CTRL_START_THR_MIN, CHARGE_CTRL_START_THR_MAX);
++		battmgr->xm_start = val;
++		if (battmgr->xm_end <= val)
++			battmgr->xm_end = min(val + CHARGE_CTRL_DELTA_SOC, CHARGE_CTRL_END_THR_MAX);
++	}
++	/* re-evaluate at once (the work is cancelled and requeued) */
++	mod_delayed_work(system_wq, &battmgr->xm_work, 0);
++
++	return 0;
++}
++
++static void qcom_battmgr_xm_limit_work(struct work_struct *work)
++{
++	struct qcom_battmgr *battmgr = container_of(to_delayed_work(work), struct qcom_battmgr, xm_work);
++	unsigned int cap, st;
++	bool want, reassert;
++	int ret;
++
++	if (!battmgr->service_up)
++		return;
++
++	mutex_lock(&battmgr->lock);
++	ret = qcom_battmgr_request_property(battmgr, BATTMGR_BAT_PROPERTY_GET, BATT_CAPACITY, 0);
++	if (!ret)
++		ret = qcom_battmgr_request_property(battmgr, BATTMGR_BAT_PROPERTY_GET, BATT_STATUS, 0);
++	if (ret) {
++		mutex_unlock(&battmgr->lock);
++		dev_dbg(battmgr->dev, "xm limit: reading battery failed: %d\n", ret);
++		goto again;
++	}
++	cap = battmgr->status.percent;
++	st = battmgr->status.status;
++
++	want = battmgr->xm_suspended;
++	if (battmgr->xm_end >= CHARGE_CTRL_END_THR_MAX || cap <= XM_LIMIT_FLOOR)
++		want = false;
++	else if (!battmgr->xm_suspended && cap >= battmgr->xm_end)
++		want = true;
++	else if (battmgr->xm_suspended && cap <= battmgr->xm_start)
++		want = false;
++	reassert = want && battmgr->xm_suspended && st == POWER_SUPPLY_STATUS_CHARGING;
++
++	if (want != battmgr->xm_suspended || reassert || battmgr->xm_first) {
++		ret = qcom_battmgr_request_property(battmgr, XM_BATTMGR_PROPERTY_SET, XM_PROP_INPUT_SUSPEND, want);
++		/* the answer to an xm request is not parsed, a timeout only means "no ack seen" (see xm_set_store) */
++		if (ret == 0 || ret == -ETIMEDOUT) {
++			dev_info(battmgr->dev, "charge limit %u..%u%%: capacity %u%%, input_suspend %u -> %u%s\n",
++				 battmgr->xm_start, battmgr->xm_end, cap, battmgr->xm_suspended, want,
++				 reassert ? " (re-asserted, charger replugged?)" : battmgr->xm_first ? " (initial)" : "");
++			battmgr->xm_suspended = want;
++			battmgr->xm_first = false;
++		} else {
++			dev_warn(battmgr->dev, "charge limit: input_suspend request failed: %d\n", ret);
++		}
++	}
++	mutex_unlock(&battmgr->lock);
++
++again:
++	schedule_delayed_work(&battmgr->xm_work, XM_LIMIT_PERIOD);
++}
++
++static void qcom_battmgr_xm_cancel(void *data)
++{
++	cancel_delayed_work_sync(data);
++}
++
+ static int qcom_battmgr_probe(struct auxiliary_device *adev,
+ 			      const struct auxiliary_device_id *id)
+ {
+@@ -1716,6 +1900,17 @@ static int qcom_battmgr_probe(struct auxiliary_device *adev,
+ 	if (ret)
+ 		return ret;
+ 
++	INIT_DELAYED_WORK(&battmgr->xm_work, qcom_battmgr_xm_limit_work);
++	if (device_property_read_bool(dev->parent, "xiaomi,input-suspend-limit")) {
++		battmgr->xm_limit = true;
++		battmgr->xm_first = true;
++		battmgr->xm_end = 80;
++		battmgr->xm_start = 75;
++		ret = devm_add_action_or_reset(dev, qcom_battmgr_xm_cancel, &battmgr->xm_work);
++		if (ret)
++			return ret;
++	}
++
+ 	battmgr->client = devm_pmic_glink_client_alloc(dev, PMIC_GLINK_OWNER_BATTMGR,
+ 						       qcom_battmgr_callback,
+ 						       qcom_battmgr_pdr_notify,
+@@ -1725,6 +1920,9 @@ static int qcom_battmgr_probe(struct auxiliary_device *adev,
+ 
+ 	pmic_glink_client_register(battmgr->client);
+ 
++	dev_set_drvdata(dev, battmgr);
++	device_create_file(dev, &dev_attr_xm_set);
++
+ 	return 0;
+ }
+ 
+diff --git a/drivers/usb/dwc3/dwc3-qcom.c b/drivers/usb/dwc3/dwc3-qcom.c
+index ac68b4218..795a6b60d 100644
+--- a/drivers/usb/dwc3/dwc3-qcom.c
++++ b/drivers/usb/dwc3/dwc3-qcom.c
+@@ -85,6 +85,7 @@ struct dwc3_qcom {
+ 	struct icc_path		*icc_path_apps;
+ 
+ 	enum usb_role		current_role;
++	bool			select_utmi_clk;
+ };
+ 
+ #define to_dwc3_qcom(d) container_of((d), struct dwc3_qcom, dwc)
+@@ -335,6 +336,8 @@ static void dwc3_qcom_enable_interrupts(struct dwc3_qcom *qcom)
+ 		dwc3_qcom_enable_port_interrupts(&qcom->ports[i]);
+ }
+ 
++static void dwc3_qcom_select_utmi_clk(struct dwc3_qcom *qcom);
++
+ static int dwc3_qcom_suspend(struct dwc3_qcom *qcom, bool wakeup)
+ {
+ 	u32 val;
+@@ -388,6 +391,21 @@ static int dwc3_qcom_resume(struct dwc3_qcom *qcom, bool wakeup)
+ 	if (ret)
+ 		dev_warn(qcom->dev, "failed to enable interconnect: %d\n", ret);
+ 
++	/*
++	 * sky (local, E031): the UTMI-as-pipe-clock selection is a QSCRATCH
++	 * setting that is only programmed at probe. If the controller domain
++	 * lost its state during suspend it must be programmed again before
++	 * the core is re-initialised, otherwise xhci_reset() never completes.
++	 */
++	if (qcom->select_utmi_clk) {
++		u32 cfg = readl(qcom->qscratch_base + QSCRATCH_GENERAL_CFG);
++
++		dev_info(qcom->dev, "resume: QSCRATCH_GENERAL_CFG=0x%08x%s\n", cfg,
++			 (cfg & PIPE_UTMI_CLK_SEL) ? "" : " (UTMI clock select lost, reprogramming)");
++		if (!(cfg & PIPE_UTMI_CLK_SEL))
++			dwc3_qcom_select_utmi_clk(qcom);
++	}
++
+ 	/* Clear existing events from PHY related to L2 in/out */
+ 	for (i = 0; i < qcom->num_ports; i++) {
+ 		dwc3_qcom_setbits(qcom->qscratch_base,
+@@ -680,6 +698,7 @@ static int dwc3_qcom_probe(struct platform_device *pdev)
+ 	 */
+ 	ignore_pipe_clk = device_property_read_bool(dev,
+ 				"qcom,select-utmi-as-pipe-clk");
++	qcom->select_utmi_clk = ignore_pipe_clk;
+ 	if (ignore_pipe_clk)
+ 		dwc3_qcom_select_utmi_clk(qcom);
+ 

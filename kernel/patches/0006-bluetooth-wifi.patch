@@ -1,0 +1,451 @@
+From: Andy Zhang and contributors (see kernel/third-party/README.md for imported parts)
+Subject: [PATCH 0006/8] Bluetooth (WCN3950 over UART) and power-sequencer changes
+
+WCN3950 Bluetooth (hci_qca/btqca), pwrseq-qcom-wcn changes and an ath10k tweak, imported from ROCKNIX (0045-0048) and adapted.
+
+Apply with: git apply (from the root of a Linux 7.3 tree).
+---
+diff --git a/drivers/bluetooth/btqca.c b/drivers/bluetooth/btqca.c
+index 22b08ab05..ef275fb83 100644
+--- a/drivers/bluetooth/btqca.c
++++ b/drivers/bluetooth/btqca.c
+@@ -13,6 +13,108 @@
+ 
+ #include "btqca.h"
+ 
++extern const char *qcom_serial_number;
++
++/* Define a static, predefined BD_ADDR structure */
++static const bdaddr_t static_bdaddr = {
++	.b = { 0x00, 0x03, 0x7F, 0x33, 0x22, 0x11 }
++};
++
++/**
++ * generate_bdaddr_from_serial - Generates a BD_ADDR using the serial number
++ * @bdaddr: Pointer to bdaddr_t structure to populate
++ *
++ * This function sets the first 3 bytes to 00:03:7F and the last 3 bytes
++ * are derived from the last 6 characters of qcom_serial_number in reversed order.
++ *
++ * Returns 0 on success, negative error code on failure.
++ */
++static int generate_bdaddr_from_serial(struct hci_dev *hdev, bdaddr_t *bdaddr)
++{
++	size_t serial_len;
++	const char *serial = qcom_serial_number;
++	char last6[7] = {0}; // 6 characters + null terminator
++	int i;
++	int ret;
++
++	if (!serial) {
++		bt_dev_err(hdev, "qcom_serial_number is NULL");
++		return -EINVAL;
++	}
++
++	serial_len = strlen(serial);
++	if (serial_len < 6) {
++		bt_dev_err(hdev, "qcom_serial_number is too short: %zu characters", serial_len);
++		return -EINVAL;
++	}
++
++	// Extract the last 6 characters
++	memcpy(last6, serial + serial_len - 6, 6);
++
++	// Initialize the first 3 bytes
++	bdaddr->b[5] = 0x00;
++	bdaddr->b[4] = 0x03;
++	bdaddr->b[3] = 0x7F;
++
++	// Convert the last 6 characters into 3 bytes in reversed order
++	for (i = 0; i < 3; i++) {
++		char byte_str[3] = {0};
++		u8 byte_val;
++
++		byte_str[0] = last6[i * 2];
++		byte_str[1] = last6[i * 2 + 1];
++
++		if (!isxdigit(byte_str[0]) || !isxdigit(byte_str[1])) {
++			bt_dev_err(hdev, "Invalid hex characters in serial number: %c%c",
++					   byte_str[0], byte_str[1]);
++			return -EINVAL;
++		}
++
++		ret = kstrtou8(byte_str, 16, &byte_val);
++		if (ret < 0) {
++			bt_dev_err(hdev, "Failed to convert hex string to u8: %c%c",
++					   byte_str[0], byte_str[1]);
++			return ret;
++		}
++
++		bdaddr->b[i] = byte_val; // Assign to bytes 0,1,2 (reversed order)
++	}
++
++	bt_dev_info(hdev, "Generated BD_ADDR: %pMR", bdaddr);
++
++	return 0;
++}
++
++/**
++ * qca_setup_bdaddr_from_serial - program a serial-derived BD_ADDR into the chip.
++ *
++ */
++int qca_setup_bdaddr_from_serial(struct hci_dev *hdev)
++{
++	bdaddr_t generated;
++	int err;
++
++	err = generate_bdaddr_from_serial(hdev, &generated);
++	if (err) {
++		bt_dev_warn(hdev, "serial BD_ADDR generation failed (%d); using fallback",
++			    err);
++		bacpy(&generated, &static_bdaddr);
++	}
++
++	err = qca_set_bdaddr(hdev, &generated);
++	if (err) {
++		bt_dev_err(hdev, "Failed to set the generated BD_ADDR");
++		return err;
++	}
++
++	bacpy(&hdev->public_addr, &generated);
++	bacpy(&hdev->bdaddr, &generated);
++	bt_dev_info(hdev, "BD_ADDR set to %pMR", &hdev->public_addr);
++
++	return 0;
++}
++EXPORT_SYMBOL_GPL(qca_setup_bdaddr_from_serial);
++
+ int qca_read_soc_version(struct hci_dev *hdev, struct qca_btsoc_version *ver,
+ 			 enum qca_btsoc_type soc_type)
+ {
+@@ -680,7 +782,7 @@ int qca_set_bdaddr_rome(struct hci_dev *hdev, const bdaddr_t *bdaddr)
+ }
+ EXPORT_SYMBOL_GPL(qca_set_bdaddr_rome);
+ 
+-static int qca_check_bdaddr(struct hci_dev *hdev, const struct qca_fw_config *config)
++static int __maybe_unused qca_check_bdaddr(struct hci_dev *hdev, const struct qca_fw_config *config)
+ {
+ 	struct hci_rp_read_bd_addr *bda;
+ 	struct sk_buff *skb;
+@@ -992,7 +1094,7 @@ int qca_uart_setup(struct hci_dev *hdev, uint8_t baudrate,
+ 		break;
+ 	}
+ 
+-	err = qca_check_bdaddr(hdev, &config);
++	err = qca_setup_bdaddr_from_serial(hdev);
+ 	if (err)
+ 		return err;
+ 
+diff --git a/drivers/bluetooth/btqca.h b/drivers/bluetooth/btqca.h
+index 8f3c1b1c7..31471943b 100644
+--- a/drivers/bluetooth/btqca.h
++++ b/drivers/bluetooth/btqca.h
+@@ -170,6 +170,7 @@ int qca_read_soc_version(struct hci_dev *hdev, struct qca_btsoc_version *ver,
+ 			 enum qca_btsoc_type);
+ int qca_set_bdaddr(struct hci_dev *hdev, const bdaddr_t *bdaddr);
+ int qca_send_pre_shutdown_cmd(struct hci_dev *hdev);
++int qca_setup_bdaddr_from_serial(struct hci_dev *hdev);
+ #else
+ 
+ static inline int qca_set_bdaddr_rome(struct hci_dev *hdev, const bdaddr_t *bdaddr)
+diff --git a/drivers/bluetooth/hci_qca.c b/drivers/bluetooth/hci_qca.c
+index 7089e9b63..3593b87b1 100644
+--- a/drivers/bluetooth/hci_qca.c
++++ b/drivers/bluetooth/hci_qca.c
+@@ -1521,6 +1521,7 @@ static int qca_set_speed(struct hci_uart *hu, enum qca_speed_type speed_type)
+ 		}
+ 
+ 		switch (soc_type) {
++		case QCA_WCN3950:
+ 		case QCA_WCN3990:
+ 			reinit_completion(&qca->drop_ev_comp);
+ 			set_bit(QCA_DROP_VENDOR_EVENT, &qca->flags);
+@@ -1556,6 +1557,7 @@ static int qca_set_speed(struct hci_uart *hu, enum qca_speed_type speed_type)
+ 		}
+ 
+ 		switch (soc_type) {
++		case QCA_WCN3950:
+ 		case QCA_WCN3990:
+ 			/* Wait for the controller to send the vendor event
+ 			 * for the baudrate change command.
+@@ -2032,7 +2034,8 @@ static int qca_setup(struct hci_uart *hu)
+ 	ret = qca_uart_setup(hdev, qca_baudrate, soc_type, ver,
+ 			firmware_name, rampatch_name);
+ 	if (!ret) {
+-		clear_bit(QCA_IBS_DISABLED, &qca->flags);
++		if (soc_type != QCA_WCN3950)
++			clear_bit(QCA_IBS_DISABLED, &qca->flags);
+ 		qca_debugfs_init(hdev);
+ 		hu->hdev->hw_error = qca_hw_error;
+ 		hu->hdev->reset = qca_reset;
+@@ -2247,6 +2250,7 @@ static void qca_power_off(struct hci_uart *hu)
+ 	power = qcadev->bt_power;
+ 
+ 	switch (soc_type) {
++	case QCA_WCN3950:
+ 	case QCA_WCN3988:
+ 	case QCA_WCN3990:
+ 	case QCA_WCN3991:
+@@ -2271,6 +2275,7 @@ static void qca_power_off(struct hci_uart *hu)
+         }
+ 
+ 	switch (soc_type) {
++	case QCA_WCN3950:
+ 	case QCA_WCN3988:
+ 	case QCA_WCN3990:
+ 	case QCA_WCN3991:
+@@ -2582,6 +2587,7 @@ static void qca_serdev_remove(struct serdev_device *serdev)
+ 	struct qca_power *power = qcadev->bt_power;
+ 
+ 	switch (qcadev->btsoc_type) {
++	case QCA_WCN3950:
+ 	case QCA_WCN3988:
+ 	case QCA_WCN3990:
+ 	case QCA_WCN3991:
+@@ -2669,6 +2675,9 @@ static int __maybe_unused qca_suspend(struct device *dev)
+ 	if (test_bit(QCA_ROM_FW, &qca->flags))
+ 		return 0;
+ 
++	if (qca_soc_type(hu) == QCA_WCN3950)
++		return 0;
++
+ 	/* During SSR after memory dump collection, controller will be
+ 	 * powered off and then powered on.If controller is powered off
+ 	 * during SSR then we should wait until SSR is completed.
+diff --git a/drivers/net/wireless/ath/ath10k/mac.c b/drivers/net/wireless/ath/ath10k/mac.c
+index 8e604697d..746867b6a 100644
+--- a/drivers/net/wireless/ath/ath10k/mac.c
++++ b/drivers/net/wireless/ath/ath10k/mac.c
+@@ -29,6 +29,86 @@
+ #include "wow.h"
+ #include "leds.h"
+ 
++extern const char *qcom_serial_number;
++
++/* Define a small struct for storing a 6-byte MAC address array */
++struct macaddr_t {
++	u8 b[ETH_ALEN];
++};
++
++/**
++ * generate_macaddr_from_serial - Generates a MAC_ADDR using the serial number
++ * @macaddr: Pointer to macaddr_t structure to populate
++ *
++ * This function sets the first 3 bytes to 00:03:7F and the last 3 bytes
++ * are derived from the last 6 characters of qcom_serial_number.
++ *
++ * Returns 0 on success, negative error code on failure.
++ */
++static int generate_macaddr_from_serial(struct ath10k *ar, struct macaddr_t *macaddr)
++{
++	size_t serial_len;
++	const char *serial = qcom_serial_number;
++	char last6[7] = {0}; // 6 characters + null terminator
++	int i;
++	int ret;
++
++	if (!serial) {
++		ath10k_err(ar, "qcom_serial_number is NULL\n");
++		return -EINVAL;
++	}
++
++	serial_len = strlen(serial);
++	if (serial_len < 6) {
++		ath10k_err(ar, "qcom_serial_number is too short: %zu characters\n", serial_len);
++		return -EINVAL;
++	}
++
++	// Extract the last 6 characters
++	memcpy(last6, serial + serial_len - 6, 6);
++
++	// Initialize the first 3 bytes
++	macaddr->b[5] = 0x00;
++	macaddr->b[4] = 0x03;
++	macaddr->b[3] = 0x7F;
++
++	// Convert the last 6 characters into 3 bytes
++	for (i = 0; i < 3; i++) {
++		char byte_str[3] = {0};
++		u8 byte_val;
++
++		byte_str[0] = last6[i * 2];
++		byte_str[1] = last6[i * 2 + 1];
++
++		if (!isxdigit(byte_str[0]) || !isxdigit(byte_str[1])) {
++			ath10k_err(ar, "Invalid hex characters in serial number: %c%c\n",
++				   byte_str[0], byte_str[1]);
++			return -EINVAL;
++		}
++
++		ret = kstrtou8(byte_str, 16, &byte_val);
++		if (ret < 0) {
++			ath10k_err(ar, "Failed to convert hex string to u8: %c%c\n",
++				   byte_str[0], byte_str[1]);
++			return ret;
++		}
++
++		macaddr->b[2 - i] = byte_val; // Assign to bytes 2,1,0
++	}
++
++	ath10k_info(ar, "Generated MAC_ADDR: %pM\n", macaddr->b);
++
++	return 0;
++}
++
++static void ath10k_reverse_mac(u8 *dst, const u8 *src)
++{
++	int i;
++
++	for (i = 0; i < ETH_ALEN; i++)
++		dst[i] = src[ETH_ALEN - 1 - i];
++}
++
+ /*********/
+ /* Rates */
+ /*********/
+@@ -9995,10 +10075,18 @@ int ath10k_mac_register(struct ath10k *ar)
+ 	struct ieee80211_supported_band *band;
+ 	void *channels;
+ 	int ret;
++	struct macaddr_t generated_macaddr;
+ 
+ 	if (!is_valid_ether_addr(ar->mac_addr)) {
+-		ath10k_warn(ar, "invalid MAC address; choosing random\n");
+-		eth_random_addr(ar->mac_addr);
++		ret = generate_macaddr_from_serial(ar, &generated_macaddr);
++		if (ret == 0) {
++			/* If successful, use the newly generated MAC address. */
++			ath10k_reverse_mac(ar->mac_addr, generated_macaddr.b);
++			ath10k_info(ar, "MAC_ADDR set to %pM from serial\n", ar->mac_addr);
++		} else {
++			ath10k_warn(ar, "invalid MAC address and serial generation failed; choosing random\n");
++			eth_random_addr(ar->mac_addr);
++		}
+ 	}
+ 	SET_IEEE80211_PERM_ADDR(ar->hw, ar->mac_addr);
+ 
+diff --git a/drivers/power/sequencing/pwrseq-qcom-wcn.c b/drivers/power/sequencing/pwrseq-qcom-wcn.c
+index 34146d637..e0e58fbab 100644
+--- a/drivers/power/sequencing/pwrseq-qcom-wcn.c
++++ b/drivers/power/sequencing/pwrseq-qcom-wcn.c
+@@ -22,6 +22,7 @@ struct pwrseq_qcom_wcn_pdata {
+ 	size_t num_vregs;
+ 	unsigned int pwup_delay_ms;
+ 	unsigned int gpio_enable_delay_ms;
++	unsigned int pwoff_min_ms; /* minimum time the supplies must stay off before they are enabled again */
+ 	const struct pwrseq_target_data **targets;
+ 	bool has_vddio; /* separate VDD IO regulator */
+ 	int (*match)(struct pwrseq_device *pwrseq, struct device *dev);
+@@ -38,6 +39,8 @@ struct pwrseq_qcom_wcn_ctx {
+ 	struct gpio_desc *xo_clk_gpio;
+ 	struct clk *clk;
+ 	unsigned long last_gpio_enable_jf;
++	unsigned long last_off_jf;
++	bool off_known;
+ };
+ 
+ static void pwrseq_qcom_wcn_ensure_gpio_delay(struct pwrseq_qcom_wcn_ctx *ctx)
+@@ -55,10 +58,44 @@ static void pwrseq_qcom_wcn_ensure_gpio_delay(struct pwrseq_qcom_wcn_ctx *ctx)
+ 		msleep(ctx->pdata->gpio_enable_delay_ms - diff_msecs);
+ }
+ 
++/*
++ * Some chips (WCN3950 on SM4450) only reset when their supplies stay off for a few hundred ms; a quick off/on, as done by the
++ * Bluetooth driver's setup retries, leaves them in the old state. The supplies may also still be on from the previous boot stage,
++ * in which case the chip never saw a power-down: do one real off period before the first power-up.
++ */
++static void pwrseq_qcom_wcn_wait_off(struct pwrseq_qcom_wcn_ctx *ctx)
++{
++	unsigned int elapsed;
++
++	if (!ctx->pdata->pwoff_min_ms)
++		return;
++
++	if (!ctx->off_known) {
++		ctx->off_known = true;
++		if (ctx->vddio && !regulator_enable(ctx->vddio))
++			regulator_disable(ctx->vddio);
++		if (!regulator_bulk_enable(ctx->pdata->num_vregs, ctx->regs))
++			regulator_bulk_disable(ctx->pdata->num_vregs, ctx->regs);
++		ctx->last_off_jf = jiffies;
++	}
++
++	elapsed = jiffies_to_msecs(jiffies - ctx->last_off_jf);
++	if (elapsed < ctx->pdata->pwoff_min_ms)
++		msleep(ctx->pdata->pwoff_min_ms - elapsed);
++}
++
++static void pwrseq_qcom_wcn_mark_off(struct pwrseq_qcom_wcn_ctx *ctx)
++{
++	ctx->last_off_jf = jiffies;
++	ctx->off_known = true;
++}
++
+ static int pwrseq_qcom_wcn_vddio_enable(struct pwrseq_device *pwrseq)
+ {
+ 	struct pwrseq_qcom_wcn_ctx *ctx = pwrseq_device_get_drvdata(pwrseq);
+ 
++	pwrseq_qcom_wcn_wait_off(ctx);
++
+ 	return regulator_enable(ctx->vddio);
+ }
+ 
+@@ -66,7 +103,10 @@ static int pwrseq_qcom_wcn_vddio_disable(struct pwrseq_device *pwrseq)
+ {
+ 	struct pwrseq_qcom_wcn_ctx *ctx = pwrseq_device_get_drvdata(pwrseq);
+ 
+-	return regulator_disable(ctx->vddio);
++	int ret = regulator_disable(ctx->vddio);
++
++	pwrseq_qcom_wcn_mark_off(ctx);
++	return ret;
+ }
+ 
+ static const struct pwrseq_unit_data pwrseq_qcom_wcn_vddio_unit_data = {
+@@ -79,6 +119,8 @@ static int pwrseq_qcom_wcn_vregs_enable(struct pwrseq_device *pwrseq)
+ {
+ 	struct pwrseq_qcom_wcn_ctx *ctx = pwrseq_device_get_drvdata(pwrseq);
+ 
++	pwrseq_qcom_wcn_wait_off(ctx);
++
+ 	return regulator_bulk_enable(ctx->pdata->num_vregs, ctx->regs);
+ }
+ 
+@@ -86,7 +128,10 @@ static int pwrseq_qcom_wcn_vregs_disable(struct pwrseq_device *pwrseq)
+ {
+ 	struct pwrseq_qcom_wcn_ctx *ctx = pwrseq_device_get_drvdata(pwrseq);
+ 
+-	return regulator_bulk_disable(ctx->pdata->num_vregs, ctx->regs);
++	int ret = regulator_bulk_disable(ctx->pdata->num_vregs, ctx->regs);
++
++	pwrseq_qcom_wcn_mark_off(ctx);
++	return ret;
+ }
+ 
+ static const struct pwrseq_unit_data pwrseq_qcom_wcn_vregs_unit_data = {
+@@ -345,6 +390,16 @@ static const struct pwrseq_qcom_wcn_pdata pwrseq_wcn3990_of_data = {
+ 	.match = pwrseq_qcom_wcn3990_match,
+ };
+ 
++static const struct pwrseq_qcom_wcn_pdata pwrseq_wcn3950_of_data = {
++	.vregs = pwrseq_wcn3990_vregs,
++	.num_vregs = ARRAY_SIZE(pwrseq_wcn3990_vregs),
++	.pwup_delay_ms = 50,
++	.pwoff_min_ms = 1000,
++	.targets = pwrseq_qcom_wcn3990_targets,
++	.has_vddio = true,
++	.match = pwrseq_qcom_wcn3990_match,
++};
++
+ static const char *const pwrseq_wcn6750_vregs[] = {
+ 	"vddaon",
+ 	"vddasd",
+@@ -532,7 +587,7 @@ static int pwrseq_qcom_wcn_probe(struct platform_device *pdev)
+ static const struct of_device_id pwrseq_qcom_wcn_of_match[] = {
+ 	{
+ 		.compatible = "qcom,wcn3950-pmu",
+-		.data = &pwrseq_wcn3990_of_data,
++		.data = &pwrseq_wcn3950_of_data,
+ 	},
+ 	{
+ 		.compatible = "qcom,wcn3988-pmu",

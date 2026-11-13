@@ -1,0 +1,1210 @@
+From: Andy Zhang and contributors (see kernel/third-party/README.md for imported parts)
+Subject: [PATCH 0007/8] Audio: RX macro fix, WCD937x, FS1599 speaker amplifier
+
+lpass-rx-macro: fix the DSM clock register stride for codec >= 2.5 (needed for the speaker path; candidate for upstream).
+wcd937x headphone TLV fix, aw88166 (ROCKNIX, unused), and fs1599.c: FS1599 speaker amplifier as an ASoC component (new, this project).
+
+Apply with: git apply (from the root of a Linux 7.3 tree).
+---
+diff --git a/sound/soc/codecs/Kconfig b/sound/soc/codecs/Kconfig
+index 8e251e1d8..04342115a 100644
+--- a/sound/soc/codecs/Kconfig
++++ b/sound/soc/codecs/Kconfig
+@@ -1339,6 +1339,15 @@ config SND_SOC_FS_AMP_LIB
+ 	select CRC16
+ 	tristate
+ 
++config SND_SOC_FS1599
++	tristate "FourSemi FS1599 analog speaker amplifier (I2C controlled)"
++	depends on I2C
++	select REGMAP_I2C
++	help
++	  Analog-input speaker amplifier controlled over I2C only, powered through
++	  DAPM as an ASoC card aux-dev (Redmi 12 5G). Needs a vendor preset file
++	  (firmware-name) built into the kernel or in /lib/firmware.
++
+ config SND_SOC_FS210X
+ 	tristate 'FourSemi FS2104/5S digital audio amplifier'
+ 	depends on I2C
+diff --git a/sound/soc/codecs/Makefile b/sound/soc/codecs/Makefile
+index 3d122ace7..74187b176 100644
+--- a/sound/soc/codecs/Makefile
++++ b/sound/soc/codecs/Makefile
+@@ -143,6 +143,7 @@ snd-soc-es8389-y := es8389.o
+ snd-soc-es9356-y := es9356.o
+ snd-soc-framer-y := framer-codec.o
+ snd-soc-fs-amp-lib-y := fs-amp-lib.o
++snd-soc-fs1599-y := fs1599.o
+ snd-soc-fs210x-y := fs210x.o
+ snd-soc-gtm601-y := gtm601.o
+ snd-soc-hdac-hdmi-y := hdac_hdmi.o
+@@ -587,6 +588,7 @@ obj-$(CONFIG_SND_SOC_ES8389)    += snd-soc-es8389.o
+ obj-$(CONFIG_SND_SOC_ES9356)    += snd-soc-es9356.o
+ obj-$(CONFIG_SND_SOC_FRAMER)	+= snd-soc-framer.o
+ obj-$(CONFIG_SND_SOC_FS_AMP_LIB)+= snd-soc-fs-amp-lib.o
++obj-$(CONFIG_SND_SOC_FS1599)	+= snd-soc-fs1599.o
+ obj-$(CONFIG_SND_SOC_FS210X)	+= snd-soc-fs210x.o
+ obj-$(CONFIG_SND_SOC_GTM601)    += snd-soc-gtm601.o
+ obj-$(CONFIG_SND_SOC_HDAC_HDMI) += snd-soc-hdac-hdmi.o
+diff --git a/sound/soc/codecs/aw88166.c b/sound/soc/codecs/aw88166.c
+index d2a138211..2b4ab9c15 100644
+--- a/sound/soc/codecs/aw88166.c
++++ b/sound/soc/codecs/aw88166.c
+@@ -15,6 +15,8 @@
+ #include <linux/minmax.h>
+ #include <linux/regmap.h>
+ #include <sound/soc.h>
++#include <sound/pcm_params.h>
++#include <sound/tlv.h>
+ #include "aw88166.h"
+ #include "aw88395/aw88395_device.h"
+ 
+@@ -31,6 +33,14 @@ struct aw88166 {
+ 	unsigned int vcalb_init_val;
+ 	unsigned int re_init_val;
+ 	unsigned int dither_st;
++
++	unsigned int sr_value;
++	unsigned int cco_mux_value;
++	unsigned int fs_value;
++	unsigned int bck_value;
++	unsigned int bck_inv_value;
++	unsigned int md_value;
++
+ 	bool phase_sync;
+ };
+ 
+@@ -92,21 +102,21 @@ static int aw_dev_get_iis_status(struct aw_device *aw_dev)
+ 	if (ret)
+ 		return ret;
+ 	if ((reg_val & AW88166_BIT_PLL_CHECK) != AW88166_BIT_PLL_CHECK) {
+-		dev_err(aw_dev->dev, "check pll lock fail, reg_val:0x%04x", reg_val);
++		dev_dbg(aw_dev->dev, "check pll lock fail, reg_val:0x%04x", reg_val);
+ 		return -EINVAL;
+ 	}
+ 
+ 	return 0;
+ }
+ 
+-static int aw_dev_check_mode1_pll(struct aw_device *aw_dev)
++static int aw_dev_check_pll(struct aw_device *aw_dev)
+ {
+ 	int ret, i;
+ 
+ 	for (i = 0; i < AW88166_DEV_SYSST_CHECK_MAX; i++) {
+ 		ret = aw_dev_get_iis_status(aw_dev);
+ 		if (ret) {
+-			dev_err(aw_dev->dev, "mode1 iis signal check error");
++			dev_dbg(aw_dev->dev, "iis signal check error");
+ 			usleep_range(AW88166_2000_US, AW88166_2000_US + 10);
+ 		} else {
+ 			return 0;
+@@ -116,71 +126,48 @@ static int aw_dev_check_mode1_pll(struct aw_device *aw_dev)
+ 	return -EPERM;
+ }
+ 
+-static int aw_dev_check_mode2_pll(struct aw_device *aw_dev)
++static int aw88166_dev_configure_syspll(struct aw88166 *aw88166)
+ {
+-	unsigned int reg_val;
+-	int ret, i;
++	struct aw_device *aw_dev = aw88166->aw_pa;
++	int ret;
+ 
+-	ret = regmap_read(aw_dev->regmap, AW88166_PLLCTRL2_REG, &reg_val);
++	/* PLL divider must be used for 8/16/32 kHz modes */
++	ret = regmap_update_bits(aw_dev->regmap, AW88166_PLLCTRL2_REG,
++			~AW88166_CCO_MUX_MASK, aw88166->cco_mux_value);
+ 	if (ret)
+ 		return ret;
+ 
+-	reg_val &= (~AW88166_CCO_MUX_MASK);
+-	if (reg_val == AW88166_CCO_MUX_DIVIDED_VALUE) {
+-		dev_dbg(aw_dev->dev, "CCO_MUX is already divider");
+-		return -EPERM;
+-	}
+-
+-	/* change mode2 */
+-	ret = regmap_update_bits(aw_dev->regmap, AW88166_PLLCTRL2_REG,
+-			~AW88166_CCO_MUX_MASK, AW88166_CCO_MUX_DIVIDED_VALUE);
++	/* The word clock (WCK) defines the beginning of a frame */
++	ret = regmap_update_bits(aw_dev->regmap, AW88166_I2SCTRL1_REG,
++			~AW88166_I2SSR_MASK, aw88166->sr_value);
+ 	if (ret)
+ 		return ret;
+ 
+-	for (i = 0; i < AW88166_DEV_SYSST_CHECK_MAX; i++) {
+-		ret = aw_dev_get_iis_status(aw_dev);
+-		if (ret) {
+-			dev_err(aw_dev->dev, "mode2 iis signal check error");
+-			usleep_range(AW88166_2000_US, AW88166_2000_US + 10);
+-		} else {
+-			break;
+-		}
+-	}
+-
+-	/* change mode1 */
+-	regmap_update_bits(aw_dev->regmap, AW88166_PLLCTRL2_REG,
+-			~AW88166_CCO_MUX_MASK, AW88166_CCO_MUX_BYPASS_VALUE);
+-	if (ret == 0) {
+-		usleep_range(AW88166_2000_US, AW88166_2000_US + 10);
+-		for (i = 0; i < AW88166_DEV_SYSST_CHECK_MAX; i++) {
+-			ret = aw_dev_get_iis_status(aw_dev);
+-			if (ret) {
+-				dev_err(aw_dev->dev, "mode2 switch to mode1, iis signal check error");
+-				usleep_range(AW88166_2000_US, AW88166_2000_US + 10);
+-			} else {
+-				break;
+-			}
+-		}
+-	}
++	/* The bit clock (BCK) defines the length of a frame */
++	ret = regmap_update_bits(aw_dev->regmap, AW88166_I2SCTRL1_REG,
++			~AW88166_I2SBCK_MASK, aw88166->bck_value);
++	if (ret)
++		return ret;
+ 
+-	return ret;
+-}
++	/* The logical frame size is the width of data for 1 slot */
++	ret = regmap_update_bits(aw_dev->regmap, AW88166_I2SCTRL1_REG,
++			~AW88166_I2SFS_MASK, aw88166->fs_value);
++	if (ret)
++		return ret;
+ 
+-static int aw_dev_check_syspll(struct aw_device *aw_dev)
+-{
+-	int ret;
++	/* The I2S interface mode (Philips standard, LSB/MSB justified) */
++	ret = regmap_update_bits(aw_dev->regmap, AW88166_I2SCTRL1_REG,
++			~AW88166_I2SMD_MASK, aw88166->md_value);
++	if (ret)
++		return ret;
+ 
+-	ret = aw_dev_check_mode1_pll(aw_dev);
+-	if (ret) {
+-		dev_dbg(aw_dev->dev, "mode1 check iis failed try switch to mode2 check");
+-		ret = aw_dev_check_mode2_pll(aw_dev);
+-		if (ret) {
+-			dev_err(aw_dev->dev, "mode2 check iis failed");
+-			return ret;
+-		}
+-	}
++	/* The polarity of the bit clock (BCK) */
++	ret = regmap_update_bits(aw_dev->regmap, AW88166_SYSCTRL_REG,
++			~AW88166_BCKINV_MASK, aw88166->bck_inv_value);
++	if (ret)
++		return ret;
+ 
+-	return 0;
++	return aw_dev_check_pll(aw_dev);
+ }
+ 
+ static int aw_dev_check_sysst(struct aw_device *aw_dev)
+@@ -204,7 +191,7 @@ static int aw_dev_check_sysst(struct aw_device *aw_dev)
+ 			return ret;
+ 
+ 		if ((reg_val & (~AW88166_BIT_SYSST_CHECK_MASK) & check_val) != check_val) {
+-			dev_err(aw_dev->dev, "check sysst fail, cnt=%d, reg_val=0x%04x, check:0x%x",
++			dev_dbg(aw_dev->dev, "check sysst fail, cnt=%d, reg_val=0x%04x, check:0x%x",
+ 				i, reg_val, AW88166_BIT_SYSST_NOSWS_CHECK);
+ 			usleep_range(AW88166_2000_US, AW88166_2000_US + 10);
+ 		} else {
+@@ -629,79 +616,22 @@ static int aw_dev_dsp_check(struct aw_device *aw_dev)
+ 
+ static int aw_dev_set_volume(struct aw_device *aw_dev, unsigned int value)
+ {
+-	struct aw_volume_desc *vol_desc = &aw_dev->volume_desc;
+-	unsigned int reg_value;
+-	u16 real_value;
+-	int ret;
+-
+-	real_value = min((value + vol_desc->init_volume), (unsigned int)AW88166_MUTE_VOL);
++	unsigned int volume = min(value, (unsigned int)AW88166_MUTE_VOL);
+ 
+-	ret = regmap_read(aw_dev->regmap, AW88166_SYSCTRL2_REG, &reg_value);
+-	if (ret)
+-		return ret;
+-
+-	dev_dbg(aw_dev->dev, "value 0x%x , reg:0x%x", value, real_value);
+-
+-	real_value = (real_value << AW88166_VOL_START_BIT) | (reg_value & AW88166_VOL_MASK);
+-
+-	ret = regmap_write(aw_dev->regmap, AW88166_SYSCTRL2_REG, real_value);
+-
+-	return ret;
+-}
+-
+-static void aw_dev_fade_in(struct aw_device *aw_dev)
+-{
+-	struct aw_volume_desc *desc = &aw_dev->volume_desc;
+-	u16 fade_in_vol = desc->ctl_volume;
+-	int fade_step = aw_dev->fade_step;
+-	int i;
+-
+-	if (fade_step == 0 || aw_dev->fade_in_time == 0) {
+-		aw_dev_set_volume(aw_dev, fade_in_vol);
+-		return;
+-	}
+-
+-	for (i = AW88166_MUTE_VOL; i >= fade_in_vol; i -= fade_step) {
+-		aw_dev_set_volume(aw_dev, i);
+-		usleep_range(aw_dev->fade_in_time, aw_dev->fade_in_time + 10);
+-	}
+-
+-	if (i != fade_in_vol)
+-		aw_dev_set_volume(aw_dev, fade_in_vol);
+-}
+-
+-static void aw_dev_fade_out(struct aw_device *aw_dev)
+-{
+-	struct aw_volume_desc *desc = &aw_dev->volume_desc;
+-	int fade_step = aw_dev->fade_step;
+-	int i;
+-
+-	if (fade_step == 0 || aw_dev->fade_out_time == 0) {
+-		aw_dev_set_volume(aw_dev, AW88166_MUTE_VOL);
+-		return;
+-	}
+-
+-	for (i = desc->ctl_volume; i <= AW88166_MUTE_VOL; i += fade_step) {
+-		aw_dev_set_volume(aw_dev, i);
+-		usleep_range(aw_dev->fade_out_time, aw_dev->fade_out_time + 10);
+-	}
+-
+-	if (i != AW88166_MUTE_VOL) {
+-		aw_dev_set_volume(aw_dev, AW88166_MUTE_VOL);
+-		usleep_range(aw_dev->fade_out_time, aw_dev->fade_out_time + 10);
+-	}
++	return regmap_update_bits(aw_dev->regmap, AW88166_SYSCTRL2_REG,
++			~AW88166_VOL_MASK, volume << AW88166_VOL_START_BIT);
+ }
+ 
+ static void aw88166_dev_mute(struct aw_device *aw_dev, bool is_mute)
+ {
+ 	if (is_mute) {
+-		aw_dev_fade_out(aw_dev);
++		aw_dev_set_volume(aw_dev, AW88166_MUTE_VOL);
+ 		regmap_update_bits(aw_dev->regmap, AW88166_SYSCTRL_REG,
+ 				~AW88166_HMUTE_MASK, AW88166_HMUTE_ENABLE_VALUE);
+ 	} else {
+ 		regmap_update_bits(aw_dev->regmap, AW88166_SYSCTRL_REG,
+ 				~AW88166_HMUTE_MASK, AW88166_HMUTE_DISABLE_VALUE);
+-		aw_dev_fade_in(aw_dev);
++		aw_dev_set_volume(aw_dev, aw_dev->volume_desc.ctl_volume);
+ 	}
+ }
+ 
+@@ -733,9 +663,9 @@ static int aw88166_dev_start(struct aw88166 *aw88166)
+ 	aw_dev_pwd(aw_dev, false);
+ 	usleep_range(AW88166_2000_US, AW88166_2000_US + 10);
+ 
+-	ret = aw_dev_check_syspll(aw_dev);
++	ret = aw88166_dev_configure_syspll(aw88166);
+ 	if (ret) {
+-		dev_err(aw_dev->dev, "pll check failed cannot start\n");
++		dev_dbg(aw_dev->dev, "pll check failed\n");
+ 		goto pll_check_fail;
+ 	}
+ 
+@@ -746,7 +676,7 @@ static int aw88166_dev_start(struct aw88166 *aw88166)
+ 	/* check i2s status */
+ 	ret = aw_dev_check_sysst(aw_dev);
+ 	if (ret) {
+-		dev_err(aw_dev->dev, "sysst check failed\n");
++		dev_dbg(aw_dev->dev, "sysst check failed\n");
+ 		goto sysst_check_fail;
+ 	}
+ 
+@@ -1156,10 +1086,14 @@ static void aw88166_start_pa(struct aw88166 *aw88166)
+ 	for (i = 0; i < AW88166_START_RETRIES; i++) {
+ 		ret = aw88166_dev_start(aw88166);
+ 		if (ret) {
+-			dev_err(aw88166->aw_pa->dev, "aw88166 device start failed. retry = %d", i);
+-			ret = aw88166_dev_fw_update(aw88166, AW88166_DSP_FW_UPDATE_ON, true);
+-			if (ret) {
+-				dev_err(aw88166->aw_pa->dev, "fw update failed");
++			int fw_ret;
++
++			dev_dbg(aw88166->aw_pa->dev,
++				"aw88166_dev_start failed, cnt:%d, ret:%d\n", i, ret);
++			fw_ret = aw88166_dev_fw_update(aw88166, AW88166_DSP_FW_UPDATE_ON, true);
++			if (fw_ret) {
++				dev_dbg(aw88166->aw_pa->dev,
++					"aw88166_dev_fw_update failed, cnt:%d, ret:%d\n", i, fw_ret);
+ 				continue;
+ 			}
+ 		} else {
+@@ -1167,6 +1101,8 @@ static void aw88166_start_pa(struct aw88166 *aw88166)
+ 			break;
+ 		}
+ 	}
++	if (ret != 0)
++		dev_err(aw88166->aw_pa->dev, "start failure (%d)\n", ret);
+ }
+ 
+ static void aw88166_startup_work(struct work_struct *work)
+@@ -1254,96 +1190,159 @@ static int aw88166_stop(struct aw_device *aw_dev)
+ 	return 0;
+ }
+ 
+-static struct snd_soc_dai_driver aw88166_dai[] = {
+-	{
+-		.name = "aw88166-aif",
+-		.id = 1,
+-		.playback = {
+-			.stream_name = "Speaker_Playback",
+-			.channels_min = 1,
+-			.channels_max = 2,
+-			.rates = AW88166_RATES,
+-			.formats = AW88166_FORMATS,
+-		},
+-		.capture = {
+-			.stream_name = "Speaker_Capture",
+-			.channels_min = 1,
+-			.channels_max = 2,
+-			.rates = AW88166_RATES,
+-			.formats = AW88166_FORMATS,
+-		},
+-	},
+-};
+-
+-static int aw88166_get_fade_in_time(struct snd_kcontrol *kcontrol,
+-	struct snd_ctl_elem_value *ucontrol)
++static int aw88166_set_fmt(struct snd_soc_dai *dai, unsigned int fmt)
+ {
+-	struct snd_soc_component *component = snd_kcontrol_chip(kcontrol);
++	struct snd_soc_component *component = dai->component;
+ 	struct aw88166 *aw88166 = snd_soc_component_get_drvdata(component);
+-	struct aw_device *aw_dev = aw88166->aw_pa;
+-
+-	ucontrol->value.integer.value[0] = aw_dev->fade_in_time;
+ 
+-	return 0;
+-}
+-
+-static int aw88166_set_fade_in_time(struct snd_kcontrol *kcontrol,
+-	struct snd_ctl_elem_value *ucontrol)
+-{
+-	struct snd_soc_component *component = snd_kcontrol_chip(kcontrol);
+-	struct aw88166 *aw88166 = snd_soc_component_get_drvdata(component);
+-	struct soc_mixer_control *mc =
+-		(struct soc_mixer_control *)kcontrol->private_value;
+-	struct aw_device *aw_dev = aw88166->aw_pa;
+-	int time;
+-
+-	time = ucontrol->value.integer.value[0];
+-
+-	if (time < mc->min || time > mc->max)
++	switch (fmt & SND_SOC_DAIFMT_INV_MASK) {
++	case SND_SOC_DAIFMT_NB_NF:
++		aw88166->bck_inv_value = AW88166_BCKINV_NOT_INVERT_VALUE;
++		break;
++	case SND_SOC_DAIFMT_IB_NF:
++		aw88166->bck_inv_value = AW88166_BCKINV_INVERTED_VALUE;
++		break;
++	default:
++		dev_err(aw88166->aw_pa->dev, "unsupported invert mode 0x%x\n",
++			fmt & SND_SOC_DAIFMT_INV_MASK);
+ 		return -EINVAL;
++	}
+ 
+-	if (time != aw_dev->fade_in_time) {
+-		aw_dev->fade_in_time = time;
+-		return 1;
++	switch (fmt & SND_SOC_DAIFMT_FORMAT_MASK) {
++	case SND_SOC_DAIFMT_I2S:
++		aw88166->md_value = AW88166_I2SMD_PHILIPS_STANDARD_VALUE;
++		break;
++	case SND_SOC_DAIFMT_MSB:
++		aw88166->md_value = AW88166_I2SMD_MSB_JUSTIFIED_VALUE;
++		break;
++	case SND_SOC_DAIFMT_LSB:
++		aw88166->md_value = AW88166_I2SMD_LSB_JUSTIFIED_VALUE;
++		break;
++	default:
++		dev_err(aw88166->aw_pa->dev, "unsupported DAI format 0x%x\n",
++			fmt & SND_SOC_DAIFMT_FORMAT_MASK);
++		return -EINVAL;
+ 	}
+ 
+ 	return 0;
+ }
+ 
+-static int aw88166_get_fade_out_time(struct snd_kcontrol *kcontrol,
+-	struct snd_ctl_elem_value *ucontrol)
++static int aw88166_hw_params(struct snd_pcm_substream *substream,
++	struct snd_pcm_hw_params *params,
++	struct snd_soc_dai *dai)
+ {
+-	struct snd_soc_component *component = snd_kcontrol_chip(kcontrol);
++	struct snd_soc_component *component = dai->component;
+ 	struct aw88166 *aw88166 = snd_soc_component_get_drvdata(component);
+-	struct aw_device *aw_dev = aw88166->aw_pa;
+ 
+-	ucontrol->value.integer.value[0] = aw_dev->fade_out_time;
+-
+-	return 0;
+-}
++	if (substream->stream == SNDRV_PCM_STREAM_CAPTURE)
++		return 0;
+ 
+-static int aw88166_set_fade_out_time(struct snd_kcontrol *kcontrol,
+-	struct snd_ctl_elem_value *ucontrol)
+-{
+-	struct snd_soc_component *component = snd_kcontrol_chip(kcontrol);
+-	struct aw88166 *aw88166 = snd_soc_component_get_drvdata(component);
+-	struct soc_mixer_control *mc =
+-		(struct soc_mixer_control *)kcontrol->private_value;
+-	struct aw_device *aw_dev = aw88166->aw_pa;
+-	int time;
++	aw88166->cco_mux_value = AW88166_CCO_MUX_BYPASS_VALUE;
++	switch (params_rate(params)) {
++	case 8000:
++		aw88166->sr_value = AW88166_I2SSR_8KHZ_VALUE;
++		aw88166->cco_mux_value = AW88166_CCO_MUX_DIVIDED_VALUE;
++		break;
++	case 11025:
++		aw88166->sr_value = AW88166_I2SSR_11P025KHZ_VALUE;
++		break;
++	case 12000:
++		aw88166->sr_value = AW88166_I2SSR_12KHZ_VALUE;
++		break;
++	case 16000:
++		aw88166->sr_value = AW88166_I2SSR_16KHZ_VALUE;
++		aw88166->cco_mux_value = AW88166_CCO_MUX_DIVIDED_VALUE;
++		break;
++	case 22050:
++		aw88166->sr_value = AW88166_I2SSR_22P05KHZ_VALUE;
++		break;
++	case 24000:
++		aw88166->sr_value = AW88166_I2SSR_24KHZ_VALUE;
++		break;
++	case 32000:
++		aw88166->sr_value = AW88166_I2SSR_32KHZ_VALUE;
++		aw88166->cco_mux_value = AW88166_CCO_MUX_DIVIDED_VALUE;
++		break;
++	case 44100:
++		aw88166->sr_value = AW88166_I2SSR_44P1KHZ_VALUE;
++		break;
++	case 48000:
++		aw88166->sr_value = AW88166_I2SSR_48KHZ_VALUE;
++		break;
++	case 96000:
++		aw88166->sr_value = AW88166_I2SSR_96KHZ_VALUE;
++		break;
++	default:
++		dev_err(aw88166->aw_pa->dev, "unsupported sample rate %d\n",
++			params_rate(params));
++		return -EINVAL;
++	}
+ 
+-	time = ucontrol->value.integer.value[0];
+-	if (time < mc->min || time > mc->max)
++	switch (params_width(params)) {
++	case 16:
++		aw88166->fs_value = AW88166_I2SFS_16_BITS_VALUE;
++		break;
++	case 20:
++		aw88166->fs_value = AW88166_I2SFS_20_BITS_VALUE;
++		break;
++	case 24:
++		aw88166->fs_value = AW88166_I2SFS_24_BITS_VALUE;
++		break;
++	case 32:
++		aw88166->fs_value = AW88166_I2SFS_32_BITS_VALUE;
++		break;
++	default:
++		dev_err(aw88166->aw_pa->dev, "unsupported bit width %d\n",
++			params_width(params));
+ 		return -EINVAL;
++	}
+ 
+-	if (time != aw_dev->fade_out_time) {
+-		aw_dev->fade_out_time = time;
+-		return 1;
++	switch (params_physical_width(params)) {
++	case 16:
++		aw88166->bck_value = AW88166_I2SBCK_32FS_VALUE;
++		break;
++	case 24:
++		aw88166->bck_value = AW88166_I2SBCK_48FS_VALUE;
++		break;
++	case 32:
++		aw88166->bck_value = AW88166_I2SBCK_64FS_VALUE;
++		break;
++	default:
++		dev_err(aw88166->aw_pa->dev, "unsupported physical bit width %d\n",
++			params_physical_width(params));
++		return -EINVAL;
+ 	}
+ 
+ 	return 0;
+ }
+ 
++static const struct snd_soc_dai_ops aw88166_dai_ops = {
++	.set_fmt = aw88166_set_fmt,
++	.hw_params = aw88166_hw_params,
++};
++
++static struct snd_soc_dai_driver aw88166_dai[] = {
++	{
++		.name = "aw88166-aif",
++		.id = 1,
++		.playback = {
++			.stream_name = "Speaker_Playback",
++			.channels_min = 1,
++			.channels_max = 2,
++			.rates = AW88166_RATES,
++			.formats = AW88166_FORMATS,
++		},
++		.capture = {
++			.stream_name = "Speaker_Capture",
++			.channels_min = 1,
++			.channels_max = 2,
++			.rates = AW88166_RATES,
++			.formats = AW88166_FORMATS,
++		},
++		.ops = &aw88166_dai_ops,
++	},
++};
++
+ static int aw88166_dev_set_profile_index(struct aw_device *aw_dev, int index)
+ {
+ 	/* check the index whether is valid */
+@@ -1435,7 +1434,8 @@ static int aw88166_volume_get(struct snd_kcontrol *kcontrol,
+ 	struct aw88166 *aw88166 = snd_soc_component_get_drvdata(codec);
+ 	struct aw_volume_desc *vol_desc = &aw88166->aw_pa->volume_desc;
+ 
+-	ucontrol->value.integer.value[0] = vol_desc->ctl_volume;
++	ucontrol->value.integer.value[0] =
++		(AW88166_MUTE_VOL - vol_desc->ctl_volume) / 2;
+ 
+ 	return 0;
+ }
+@@ -1448,12 +1448,13 @@ static int aw88166_volume_set(struct snd_kcontrol *kcontrol,
+ 	struct aw_volume_desc *vol_desc = &aw88166->aw_pa->volume_desc;
+ 	struct soc_mixer_control *mc =
+ 		(struct soc_mixer_control *)kcontrol->private_value;
+-	int value;
++	int value = ucontrol->value.integer.value[0];
+ 
+-	value = ucontrol->value.integer.value[0];
+ 	if (value < mc->min || value > mc->max)
+ 		return -EINVAL;
+ 
++	value = AW88166_MUTE_VOL - (value * 2);
++
+ 	if (vol_desc->ctl_volume != value) {
+ 		vol_desc->ctl_volume = value;
+ 		aw_dev_set_volume(aw88166->aw_pa, vol_desc->ctl_volume);
+@@ -1464,38 +1465,6 @@ static int aw88166_volume_set(struct snd_kcontrol *kcontrol,
+ 	return 0;
+ }
+ 
+-static int aw88166_get_fade_step(struct snd_kcontrol *kcontrol,
+-				struct snd_ctl_elem_value *ucontrol)
+-{
+-	struct snd_soc_component *codec = snd_kcontrol_chip(kcontrol);
+-	struct aw88166 *aw88166 = snd_soc_component_get_drvdata(codec);
+-
+-	ucontrol->value.integer.value[0] = aw88166->aw_pa->fade_step;
+-
+-	return 0;
+-}
+-
+-static int aw88166_set_fade_step(struct snd_kcontrol *kcontrol,
+-				struct snd_ctl_elem_value *ucontrol)
+-{
+-	struct snd_soc_component *codec = snd_kcontrol_chip(kcontrol);
+-	struct aw88166 *aw88166 = snd_soc_component_get_drvdata(codec);
+-	struct soc_mixer_control *mc =
+-		(struct soc_mixer_control *)kcontrol->private_value;
+-	int value;
+-
+-	value = ucontrol->value.integer.value[0];
+-	if (value < mc->min || value > mc->max)
+-		return -EINVAL;
+-
+-	if (aw88166->aw_pa->fade_step != value) {
+-		aw88166->aw_pa->fade_step = value;
+-		return 1;
+-	}
+-
+-	return 0;
+-}
+-
+ static int aw88166_re_get(struct snd_kcontrol *kcontrol,
+ 				struct snd_ctl_elem_value *ucontrol)
+ {
+@@ -1540,8 +1509,6 @@ static int aw88166_dev_init(struct aw88166 *aw88166, struct aw_container *aw_cfg
+ 		dev_err(aw_dev->dev, "aw_dev acf parse failed\n");
+ 		return -EINVAL;
+ 	}
+-	aw_dev->fade_in_time = AW88166_1000_US / 10;
+-	aw_dev->fade_out_time = AW88166_1000_US >> 1;
+ 	aw_dev->prof_cur = aw_dev->prof_info.prof_desc[0].id;
+ 	aw_dev->prof_index = aw_dev->prof_info.prof_desc[0].id;
+ 
+@@ -1612,16 +1579,16 @@ static int aw88166_request_firmware_file(struct aw88166 *aw88166)
+ 	return ret;
+ }
+ 
++/*
++ * The volume register is in 0.125dB units which is too precise for
++ * TLV (!) so we have to multiply the scale by 2.
++ */
++static const DECLARE_TLV_DB_SCALE(volume_tlv, -12775, 25, 0);
++
+ static const struct snd_kcontrol_new aw88166_controls[] = {
+-	SOC_SINGLE_EXT("PCM Playback Volume", AW88166_SYSCTRL2_REG,
+-		6, AW88166_MUTE_VOL, 0, aw88166_volume_get,
+-		aw88166_volume_set),
+-	SOC_SINGLE_EXT("Fade Step", 0, 0, AW88166_MUTE_VOL, 0,
+-		aw88166_get_fade_step, aw88166_set_fade_step),
+-	SOC_SINGLE_EXT("Volume Ramp Up Step", 0, 0, FADE_TIME_MAX, FADE_TIME_MIN,
+-		aw88166_get_fade_in_time, aw88166_set_fade_in_time),
+-	SOC_SINGLE_EXT("Volume Ramp Down Step", 0, 0, FADE_TIME_MAX, FADE_TIME_MIN,
+-		aw88166_get_fade_out_time, aw88166_set_fade_out_time),
++	SOC_SINGLE_EXT_TLV("PCM Playback Volume", AW88166_SYSCTRL2_REG,
++		0, AW88166_CTL_MAX_VOL, 1,
++		aw88166_volume_get, aw88166_volume_set, volume_tlv),
+ 	SOC_SINGLE_EXT("Calib", 0, 0, AW88166_CALI_RE_MAX, 0,
+ 		aw88166_re_get, aw88166_re_set),
+ 	AW88166_PROFILE_EXT("AW88166 Profile Set", aw88166_profile_info,
+@@ -1749,8 +1716,7 @@ static int aw88166_init(struct aw88166 *aw88166, struct i2c_client *i2c, struct
+ 	aw_dev->channel = AW88166_DEV_DEFAULT_CH;
+ 	aw_dev->fw_status = AW88166_DEV_FW_FAILED;
+ 
+-	aw_dev->fade_step = AW88166_VOLUME_STEP_DB;
+-	aw_dev->volume_desc.ctl_volume = AW88166_VOL_DEFAULT_VALUE;
++	aw_dev->volume_desc.ctl_volume = AW88166_CTL_DEFAULT_VOL;
+ 
+ 	aw88166_parse_channel_dt(aw88166);
+ 
+@@ -1769,6 +1735,14 @@ static int aw88166_i2c_probe(struct i2c_client *i2c)
+ 	if (!aw88166)
+ 		return -ENOMEM;
+ 
++	/* set defaults */
++	aw88166->sr_value = AW88166_I2SSR_48KHZ_VALUE;
++	aw88166->cco_mux_value = AW88166_CCO_MUX_BYPASS_VALUE;
++	aw88166->fs_value = AW88166_I2SFS_32_BITS_VALUE;
++	aw88166->bck_value = AW88166_I2SBCK_64FS_VALUE;
++	aw88166->bck_inv_value = AW88166_BCKINV_NOT_INVERT_VALUE;
++	aw88166->md_value = AW88166_I2SMD_PHILIPS_STANDARD_VALUE;
++
+ 	mutex_init(&aw88166->lock);
+ 
+ 	i2c_set_clientdata(i2c, aw88166);
+diff --git a/sound/soc/codecs/aw88166.h b/sound/soc/codecs/aw88166.h
+index 9f3f47a70..41fd8adba 100644
+--- a/sound/soc/codecs/aw88166.h
++++ b/sound/soc/codecs/aw88166.h
+@@ -372,6 +372,110 @@
+ 		AW88166_PLLS_LOCKED_VALUE | \
+ 		AW88166_SWS_SWITCHING_VALUE)
+ 
++#define AW88166_BCKINV_START_BIT	(4)
++#define AW88166_BCKINV_BITS_LEN	(1)
++#define AW88166_BCKINV_MASK	\
++	(~(((1<<AW88166_BCKINV_BITS_LEN)-1) << AW88166_BCKINV_START_BIT))
++
++#define AW88166_BCKINV_NOT_INVERT	(0)
++#define AW88166_BCKINV_NOT_INVERT_VALUE	\
++	(AW88166_BCKINV_NOT_INVERT << AW88166_BCKINV_START_BIT)
++
++#define AW88166_BCKINV_INVERTED	(1)
++#define AW88166_BCKINV_INVERTED_VALUE	\
++	(AW88166_BCKINV_INVERTED << AW88166_BCKINV_START_BIT)
++
++#define AW88166_I2SMD_START_BIT	(8)
++#define AW88166_I2SMD_BITS_LEN	(2)
++#define AW88166_I2SMD_MASK	\
++	(~(((1<<AW88166_I2SMD_BITS_LEN)-1) << AW88166_I2SMD_START_BIT))
++
++#define AW88166_I2SMD_PHILIPS_STANDARD	(0)
++#define AW88166_I2SMD_PHILIPS_STANDARD_VALUE	\
++	(AW88166_I2SMD_PHILIPS_STANDARD << AW88166_I2SMD_START_BIT)
++
++#define AW88166_I2SMD_MSB_JUSTIFIED	(1)
++#define AW88166_I2SMD_MSB_JUSTIFIED_VALUE	\
++	(AW88166_I2SMD_MSB_JUSTIFIED << AW88166_I2SMD_START_BIT)
++
++#define AW88166_I2SMD_LSB_JUSTIFIED	(2)
++#define AW88166_I2SMD_LSB_JUSTIFIED_VALUE	\
++	(AW88166_I2SMD_LSB_JUSTIFIED << AW88166_I2SMD_START_BIT)
++
++#define AW88166_I2SFS_START_BIT		(6)
++#define AW88166_I2SFS_BITS_LEN		(2)
++#define AW88166_I2SFS_MASK		\
++	(~(((1<<AW88166_I2SFS_BITS_LEN)-1) << AW88166_I2SFS_START_BIT))
++
++#define AW88166_I2SFS_16_BITS		(0)
++#define AW88166_I2SFS_16_BITS_VALUE	\
++	(AW88166_I2SFS_16_BITS << AW88166_I2SFS_START_BIT)
++#define AW88166_I2SFS_20_BITS		(1)
++#define AW88166_I2SFS_20_BITS_VALUE	\
++	(AW88166_I2SFS_20_BITS << AW88166_I2SFS_START_BIT)
++#define AW88166_I2SFS_24_BITS		(2)
++#define AW88166_I2SFS_24_BITS_VALUE	\
++	(AW88166_I2SFS_24_BITS << AW88166_I2SFS_START_BIT)
++#define AW88166_I2SFS_32_BITS		(3)
++#define AW88166_I2SFS_32_BITS_VALUE	\
++	(AW88166_I2SFS_32_BITS << AW88166_I2SFS_START_BIT)
++
++#define AW88166_I2SBCK_START_BIT	(4)
++#define AW88166_I2SBCK_BITS_LEN	(2)
++#define AW88166_I2SBCK_MASK	\
++	(~(((1<<AW88166_I2SBCK_BITS_LEN)-1) << AW88166_I2SBCK_START_BIT))
++
++#define AW88166_I2SBCK_32FS	(0)
++#define AW88166_I2SBCK_32FS_VALUE	\
++	(AW88166_I2SBCK_32FS << AW88166_I2SBCK_START_BIT)
++
++#define AW88166_I2SBCK_48FS	(1)
++#define AW88166_I2SBCK_48FS_VALUE	\
++	(AW88166_I2SBCK_48FS << AW88166_I2SBCK_START_BIT)
++
++#define AW88166_I2SBCK_64FS	(2)
++#define AW88166_I2SBCK_64FS_VALUE	\
++	(AW88166_I2SBCK_64FS << AW88166_I2SBCK_START_BIT)
++
++#define AW88166_I2SSR_START_BIT		(0)
++#define AW88166_I2SSR_BITS_LEN		(4)
++#define AW88166_I2SSR_MASK		\
++	(~(((1<<AW88166_I2SSR_BITS_LEN)-1) << AW88166_I2SSR_START_BIT))
++
++#define AW88166_I2SSR_8KHZ		(0)
++#define AW88166_I2SSR_8KHZ_VALUE	\
++	(AW88166_I2SSR_8KHZ << AW88166_I2SSR_START_BIT)
++#define AW88166_I2SSR_11P025KHZ		(1)
++#define AW88166_I2SSR_11P025KHZ_VALUE	\
++	(AW88166_I2SSR_11P025KHZ << AW88166_I2SSR_START_BIT)
++#define AW88166_I2SSR_12KHZ		(2)
++#define AW88166_I2SSR_12KHZ_VALUE	\
++	(AW88166_I2SSR_12KHZ << AW88166_I2SSR_START_BIT)
++#define AW88166_I2SSR_16KHZ		(3)
++#define AW88166_I2SSR_16KHZ_VALUE	\
++	(AW88166_I2SSR_16KHZ << AW88166_I2SSR_START_BIT)
++#define AW88166_I2SSR_22P05KHZ		(4)
++#define AW88166_I2SSR_22P05KHZ_VALUE	\
++	(AW88166_I2SSR_22P05KHZ << AW88166_I2SSR_START_BIT)
++#define AW88166_I2SSR_24KHZ		(5)
++#define AW88166_I2SSR_24KHZ_VALUE	\
++	(AW88166_I2SSR_24KHZ << AW88166_I2SSR_START_BIT)
++#define AW88166_I2SSR_32KHZ		(6)
++#define AW88166_I2SSR_32KHZ_VALUE	\
++	(AW88166_I2SSR_32KHZ << AW88166_I2SSR_START_BIT)
++#define AW88166_I2SSR_44P1KHZ		(7)
++#define AW88166_I2SSR_44P1KHZ_VALUE	\
++	(AW88166_I2SSR_44P1KHZ << AW88166_I2SSR_START_BIT)
++#define AW88166_I2SSR_48KHZ		(8)
++#define AW88166_I2SSR_48KHZ_VALUE	\
++	(AW88166_I2SSR_48KHZ << AW88166_I2SSR_START_BIT)
++#define AW88166_I2SSR_96KHZ		(9)
++#define AW88166_I2SSR_96KHZ_VALUE	\
++	(AW88166_I2SSR_96KHZ << AW88166_I2SSR_START_BIT)
++#define AW88166_I2SSR_192KHZ		(10)
++#define AW88166_I2SSR_192KHZ_VALUE	\
++	(AW88166_I2SSR_192KHZ << AW88166_I2SSR_START_BIT)
++
+ #define AW88166_CCO_MUX_START_BIT	(14)
+ #define AW88166_CCO_MUX_BITS_LEN	(1)
+ #define AW88166_CCO_MUX_MASK		\
+@@ -435,8 +539,8 @@
+ #define AW88166_DSP_RE_SHIFT			(12)
+ #define AW88166_CALI_RE_MAX			(15000)
+ #define AW88166_CALI_RE_MIN			(4000)
+-#define AW88166_VOLUME_STEP_DB			(64)
+-#define AW88166_VOL_DEFAULT_VALUE		(0)
++#define AW88166_CTL_MAX_VOL		(AW88166_MUTE_VOL / 2)
++#define AW88166_CTL_DEFAULT_VOL		(AW88166_CTL_MAX_VOL / 2)
+ #define AW88166_DSP_RE_TO_SHOW_RE(re, shift)	(((re) * (1000)) >> (shift))
+ #define AW88166_SHOW_RE_TO_DSP_RE(re, shift)	(((re) << shift) / (1000))
+ 
+@@ -453,13 +557,14 @@
+ #define AW88166_DEV_SYSST_CHECK_MAX		(10)
+ #define AW88166_START_RETRIES			(5)
+ #define AW88166_START_WORK_DELAY_MS		(0)
+-#define FADE_TIME_MAX				100000
+-#define FADE_TIME_MIN				0
+ #define AW88166_CHIP_ID			(0x2066)
+ #define AW88166_I2C_NAME			"aw88166"
+ #define AW88166_ACF_FILE			"aw88166_acf.bin"
+ 
++/* NOTE: 192000 has a reg value downstream but is not advertised here */
+ #define AW88166_RATES (SNDRV_PCM_RATE_8000_48000 | \
++			SNDRV_PCM_RATE_12000 | \
++			SNDRV_PCM_RATE_24000 | \
+ 			SNDRV_PCM_RATE_96000)
+ #define AW88166_FORMATS (SNDRV_PCM_FMTBIT_S16_LE | \
+ 			SNDRV_PCM_FMTBIT_S24_LE | \
+diff --git a/sound/soc/codecs/fs1599.c b/sound/soc/codecs/fs1599.c
+new file mode 100644
+index 000000000..1e85258e3
+--- /dev/null
++++ b/sound/soc/codecs/fs1599.c
+@@ -0,0 +1,335 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * FourSemi FS1599 analog-input speaker amplifier (I2C control only)
++ *
++ * The amplifier takes the analog AUX output of the codec (WCD937x on the Redmi 12 5G) and has no digital audio
++ * interface: all it needs is to be switched on before the stream starts and off afterwards.  This driver exposes it
++ * as a DAPM component (IN -> AMP -> OUT) that is used as an ASoC card aux-dev, so the codec AUX path powers it.
++ *
++ * The register values come from a vendor preset file ("firmware-name", .fsm, kept out of the source tree) and the
++ * power-up / power-down sequences of the vendor fs15xx module, re-implemented from tools/fs1599.py of the bring-up
++ * project (verified on the phone from userspace first).
++ *
++ * Bus format: 8-bit register, 16-bit big-endian value.
++ * Preset file (little endian, struct base B = 0x20):
++ *   u16 @B+0x1a  number of directory entries
++ *   directory @B+0x28: { u16 offset, u16 type }, the table is at B+0x28+offset
++ *   type 2 (common): u16 count, count * { u16 hdr, u16 val }
++ *   type 3 (scenes): u16 count, count * { u16 scene_mask, u16 hdr, u16 val }, applied if scene_mask & BIT(scene)
++ *   hdr 0xFxxx with bits 11:8 == 0: write reg (hdr & 0xff) = val
++ *   hdr 0xFxxx with bits 11:8 == 0xf: special entry, not supported (refused when parsing)
++ *   otherwise: bit field, len = (hdr >> 12) + 1, pos = (hdr >> 8) & 0xf, reg = hdr & 0xff: read-modify-write
++ */
++
++#include <linux/delay.h>
++#include <linux/firmware.h>
++#include <linux/i2c.h>
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/regmap.h>
++#include <linux/unaligned.h>
++#include <sound/soc.h>
++
++#define FS1599_REG_ID_RESET	0x10
++#define FS1599_REG_STATUS	0x0e
++#define FS1599_REG_OUT_EN	0x11
++#define FS1599_REG_LOCK		0x1f
++#define FS1599_REG_BOOST	0xc0
++
++#define FS1599_STATUS_READY_A	0x0003
++#define FS1599_STATUS_READY_B	0x0300
++
++#define FS1599_FSM_BASE		0x20
++#define FS1599_FSM_NDIR		(FS1599_FSM_BASE + 0x1a)
++#define FS1599_FSM_DIR		(FS1599_FSM_BASE + 0x28)
++#define FS1599_FSM_COMMON	2
++#define FS1599_FSM_SCENES	3
++#define FS1599_DEFAULT_SCENE	6
++
++struct fs1599_entry {
++	u16 hdr;
++	u16 val;
++};
++
++struct fs1599 {
++	struct device *dev;
++	struct regmap *regmap;
++	struct fs1599_entry *entries;	/* common table followed by the scene table, already filtered */
++	unsigned int num_entries;
++	bool on;
++};
++
++static const struct regmap_config fs1599_regmap_config = {
++	.reg_bits = 8,
++	.val_bits = 16,
++	.val_format_endian = REGMAP_ENDIAN_BIG,
++	.max_register = 0xff,
++	.cache_type = REGCACHE_NONE,
++};
++
++static int fs1599_apply_entry(struct fs1599 *fs, const struct fs1599_entry *e)
++{
++	u16 hdr = e->hdr;
++
++	if (hdr >= 0xf000 && (hdr & 0x0f00) == 0)
++		return regmap_write(fs->regmap, hdr & 0xff, e->val);
++
++	{
++		unsigned int len = (hdr >> 12) + 1, pos = (hdr >> 8) & 0xf;
++		unsigned int mask = (((1U << len) - 1) << pos) & 0xffff;
++
++		return regmap_update_bits(fs->regmap, hdr & 0xff, mask, (unsigned int)e->val << pos);
++	}
++}
++
++static int fs1599_reset_ready(struct fs1599 *fs)
++{
++	unsigned int v;
++	int i, ret;
++
++	for (i = 0; i < 5; i++) {
++		ret = regmap_write(fs->regmap, FS1599_REG_ID_RESET, 2);
++		if (ret)
++			return ret;
++		msleep(15);
++		ret = regmap_write(fs->regmap, FS1599_REG_ID_RESET, 1);
++		if (ret)
++			return ret;
++		ret = regmap_read(fs->regmap, FS1599_REG_STATUS, &v);
++		if (ret)
++			return ret;
++		if (v == FS1599_STATUS_READY_A || v == FS1599_STATUS_READY_B)
++			return 0;
++	}
++	dev_err(fs->dev, "not ready after 5 resets (status 0x%04x)\n", v);
++	return -EIO;
++}
++
++static int fs1599_power_on(struct fs1599 *fs)
++{
++	unsigned int i;
++	int ret;
++
++	ret = fs1599_reset_ready(fs);
++	if (ret)
++		return ret;
++
++	/* load preset */
++	ret = regmap_write(fs->regmap, FS1599_REG_LOCK, 0x0091);
++	for (i = 0; !ret && i < fs->num_entries; i++)
++		ret = fs1599_apply_entry(fs, &fs->entries[i]);
++	if (!ret)
++		ret = regmap_write(fs->regmap, FS1599_REG_LOCK, 0x0000);
++	if (ret)
++		return ret;
++
++	/* start up */
++	ret = regmap_write(fs->regmap, FS1599_REG_LOCK, 0xca91);
++	if (!ret)
++		ret = regmap_write(fs->regmap, FS1599_REG_BOOST, 0x0010);
++	if (!ret)
++		ret = regmap_write(fs->regmap, FS1599_REG_ID_RESET, 0x0000);
++	if (!ret)
++		ret = regmap_write(fs->regmap, FS1599_REG_OUT_EN, 0x00c0);
++	if (ret)
++		return ret;
++	msleep(10);
++	ret = regmap_write(fs->regmap, FS1599_REG_BOOST, 0x0000);
++	if (!ret)
++		ret = regmap_write(fs->regmap, FS1599_REG_LOCK, 0x0000);
++	return ret;
++}
++
++static int fs1599_power_off(struct fs1599 *fs)
++{
++	int ret;
++
++	ret = regmap_write(fs->regmap, FS1599_REG_OUT_EN, 0x0000);
++	msleep(20);
++	if (!ret)
++		ret = regmap_write(fs->regmap, FS1599_REG_ID_RESET, 0x0001);
++	return ret;
++}
++
++static int fs1599_amp_event(struct snd_soc_dapm_widget *w, struct snd_kcontrol *kcontrol, int event)
++{
++	struct snd_soc_component *component = snd_soc_dapm_to_component(w->dapm);
++	struct fs1599 *fs = snd_soc_component_get_drvdata(component);
++	int ret = 0;
++
++	switch (event) {
++	case SND_SOC_DAPM_POST_PMU:
++		if (!fs->num_entries) {
++			dev_err(fs->dev, "no preset loaded, amplifier stays off\n");
++			return -ENOENT;
++		}
++		ret = fs1599_power_on(fs);
++		if (ret)
++			dev_err(fs->dev, "power on failed: %d\n", ret);
++		else
++			fs->on = true;
++		break;
++	case SND_SOC_DAPM_PRE_PMD:
++		if (fs->on) {
++			ret = fs1599_power_off(fs);
++			fs->on = false;
++		}
++		break;
++	}
++	return ret;
++}
++
++static const struct snd_soc_dapm_widget fs1599_dapm_widgets[] = {
++	SND_SOC_DAPM_INPUT("IN"),
++	SND_SOC_DAPM_PGA_E("AMP", SND_SOC_NOPM, 0, 0, NULL, 0, fs1599_amp_event,
++			   SND_SOC_DAPM_POST_PMU | SND_SOC_DAPM_PRE_PMD),
++	SND_SOC_DAPM_OUTPUT("OUT"),
++};
++
++static const struct snd_soc_dapm_route fs1599_dapm_routes[] = {
++	{ "AMP", NULL, "IN" },
++	{ "OUT", NULL, "AMP" },
++};
++
++static const struct snd_soc_component_driver fs1599_component = {
++	.dapm_widgets		= fs1599_dapm_widgets,
++	.num_dapm_widgets	= ARRAY_SIZE(fs1599_dapm_widgets),
++	.dapm_routes		= fs1599_dapm_routes,
++	.num_dapm_routes	= ARRAY_SIZE(fs1599_dapm_routes),
++};
++
++static int fs1599_parse_fsm(struct fs1599 *fs, const struct firmware *fw, u32 scene)
++{
++	const u8 *d = fw->data;
++	size_t size = fw->size;
++	u32 mask = BIT(scene);
++	size_t tab[4] = { 0 };
++	unsigned int n, i, nc = 0, ns = 0, k = 0;
++	size_t p;
++
++	if (size < FS1599_FSM_DIR)
++		return -EINVAL;
++	n = get_unaligned_le16(d + FS1599_FSM_NDIR);
++	if (n < 1 || n > 16 || FS1599_FSM_DIR + 4 * n > size)
++		return -EINVAL;
++	for (i = 0; i < n; i++) {
++		u16 off = get_unaligned_le16(d + FS1599_FSM_DIR + 4 * i);
++		u16 type = get_unaligned_le16(d + FS1599_FSM_DIR + 4 * i + 2);
++
++		if (type < ARRAY_SIZE(tab))
++			tab[type] = FS1599_FSM_DIR + off;
++	}
++	if (!tab[FS1599_FSM_COMMON] || !tab[FS1599_FSM_SCENES])
++		return -EINVAL;
++
++	p = tab[FS1599_FSM_COMMON];
++	if (p + 2 > size)
++		return -EINVAL;
++	nc = get_unaligned_le16(d + p);
++	if (p + 2 + 4 * nc > size)
++		return -EINVAL;
++	p = tab[FS1599_FSM_SCENES];
++	if (p + 2 > size)
++		return -EINVAL;
++	ns = get_unaligned_le16(d + p);
++	if (p + 2 + 6 * ns > size)
++		return -EINVAL;
++
++	fs->entries = devm_kcalloc(fs->dev, nc + ns, sizeof(*fs->entries), GFP_KERNEL);
++	if (!fs->entries)
++		return -ENOMEM;
++
++	p = tab[FS1599_FSM_COMMON] + 2;
++	for (i = 0; i < nc; i++, p += 4) {
++		fs->entries[k].hdr = get_unaligned_le16(d + p);
++		fs->entries[k].val = get_unaligned_le16(d + p + 2);
++		if (fs->entries[k].hdr >= 0x1000 && (fs->entries[k].hdr & 0x0f00) == 0x0f00)
++			return -EOPNOTSUPP;
++		k++;
++	}
++	p = tab[FS1599_FSM_SCENES] + 2;
++	for (i = 0; i < ns; i++, p += 6) {
++		if (!(get_unaligned_le16(d + p) & mask))
++			continue;
++		fs->entries[k].hdr = get_unaligned_le16(d + p + 2);
++		fs->entries[k].val = get_unaligned_le16(d + p + 4);
++		if (fs->entries[k].hdr >= 0x1000 && (fs->entries[k].hdr & 0x0f00) == 0x0f00)
++			return -EOPNOTSUPP;
++		k++;
++	}
++	fs->num_entries = k;
++	return 0;
++}
++
++static int fs1599_probe(struct i2c_client *client)
++{
++	struct device *dev = &client->dev;
++	const struct firmware *fw;
++	const char *fwname = "foursemi/fs1599.fsm";
++	struct fs1599 *fs;
++	unsigned int status;
++	u32 scene = FS1599_DEFAULT_SCENE;
++	int ret;
++
++	fs = devm_kzalloc(dev, sizeof(*fs), GFP_KERNEL);
++	if (!fs)
++		return -ENOMEM;
++	fs->dev = dev;
++	fs->regmap = devm_regmap_init_i2c(client, &fs1599_regmap_config);
++	if (IS_ERR(fs->regmap))
++		return PTR_ERR(fs->regmap);
++	i2c_set_clientdata(client, fs);
++
++	device_property_read_string(dev, "firmware-name", &fwname);
++	device_property_read_u32(dev, "foursemi,scene", &scene);
++	if (scene > 15)
++		return dev_err_probe(dev, -EINVAL, "bad scene %u\n", scene);
++
++	/* the preset is built into the kernel (CONFIG_EXTRA_FIRMWARE): no race with the root file system */
++	ret = request_firmware(&fw, fwname, dev);
++	if (ret) {
++		dev_err(dev, "preset %s not found (%d): the amplifier will stay off\n", fwname, ret);
++	} else {
++		ret = fs1599_parse_fsm(fs, fw, scene);
++		release_firmware(fw);
++		if (ret)
++			dev_err(dev, "bad preset %s (%d): the amplifier will stay off\n", fwname, ret);
++		else
++			dev_info(dev, "preset %s: scene %u, %u register entries\n", fwname, scene, fs->num_entries);
++	}
++
++	/* informational only: do not fail the sound card if the chip does not answer */
++	if (regmap_read(fs->regmap, FS1599_REG_STATUS, &status))
++		dev_warn(dev, "no answer on the I2C bus\n");
++	else
++		dev_info(dev, "status register 0x%04x\n", status);
++
++	return devm_snd_soc_register_component(dev, &fs1599_component, NULL, 0);
++}
++
++static void fs1599_shutdown(struct i2c_client *client)
++{
++	struct fs1599 *fs = i2c_get_clientdata(client);
++
++	if (fs && fs->on)
++		fs1599_power_off(fs);
++}
++
++static const struct of_device_id fs1599_of_match[] = {
++	{ .compatible = "foursemi,fs1599" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, fs1599_of_match);
++
++static struct i2c_driver fs1599_i2c_driver = {
++	.driver = {
++		.name = "fs1599",
++		.of_match_table = fs1599_of_match,
++	},
++	.probe = fs1599_probe,
++	.shutdown = fs1599_shutdown,
++};
++module_i2c_driver(fs1599_i2c_driver);
++
++MODULE_DESCRIPTION("FourSemi FS1599 analog speaker amplifier (DAPM-controlled)");
++MODULE_LICENSE("GPL");
+diff --git a/sound/soc/codecs/lpass-rx-macro.c b/sound/soc/codecs/lpass-rx-macro.c
+index 282a6aaa9..c0a954ff1 100644
+--- a/sound/soc/codecs/lpass-rx-macro.c
++++ b/sound/soc/codecs/lpass-rx-macro.c
+@@ -3838,7 +3838,8 @@ static int rx_macro_probe(struct platform_device *pdev)
+ 	case LPASS_CODEC_VERSION_2_7:
+ 	case LPASS_CODEC_VERSION_2_8:
+ 		rx->rxn_reg_stride = 0xc0;
+-		rx->rxn_reg_stride2 = 0x0;
++		/* RX2 (AUX) has SEC7 at 0x5c0 and DSM_CTL at 0x5cc on codec version >= 2.5 (CDC_2_5_RX_RX2_RX_PATH_*): 0x440 + 2 * 0xc0 + 0xc */
++		rx->rxn_reg_stride2 = 0xc;
+ 		def_count = ARRAY_SIZE(rx_defaults) + ARRAY_SIZE(rx_2_5_defaults);
+ 		reg_defaults = kmalloc_objs(struct reg_default, def_count);
+ 		if (!reg_defaults)
+diff --git a/sound/soc/codecs/wcd937x.c b/sound/soc/codecs/wcd937x.c
+index 0dd05604f..c110f4373 100644
+--- a/sound/soc/codecs/wcd937x.c
++++ b/sound/soc/codecs/wcd937x.c
+@@ -114,7 +114,7 @@ static const char * const wcd937x_supplies[] = {
+ };
+ 
+ static const SNDRV_CTL_TLVD_DECLARE_DB_MINMAX(ear_pa_gain, 600, -1800);
+-static const DECLARE_TLV_DB_SCALE(line_gain, 0, 7, 1);
++static const DECLARE_TLV_DB_SCALE(line_gain, -3000, 150, 0);
+ static const DECLARE_TLV_DB_SCALE(analog_gain, 0, 25, 1);
+ 
+ struct wcd937x_mbhc_zdet_param {
