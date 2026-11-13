@@ -33,6 +33,8 @@ install -m755 /tmp/sky-swapfile /usr/local/sbin/sky-swapfile
 install -m644 /tmp/sky-swapfile.service /etc/systemd/system/sky-swapfile.service
 printf 'SIZE_MB=4096\nMIN_FREE_MB=8192\nPRIORITY=10\n' > /etc/sky-swapfile.conf
 mkdir -p /etc/sysctl.d; printf 'vm.swappiness=30\n' > /etc/sysctl.d/90-sky-swap.conf
+# journald size cap (the journal had reached 2 GB on the flash root)
+install -D -m644 /tmp/10-sky-journal.conf /etc/systemd/journald.conf.d/10-sky.conf
 # no idle suspend (E031 run 3): GNOME default overrides, compiled into the schema cache
 install -m644 /tmp/90_sky-power.gschema.override /usr/share/glib-2.0/schemas/90_sky-power.gschema.override
 install -D -m644 /tmp/61-sky-battery.hwdb /etc/udev/hwdb.d/61-sky-battery.hwdb && systemd-hwdb update

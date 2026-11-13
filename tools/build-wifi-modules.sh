@@ -12,6 +12,8 @@ K="$ROOT/out/kbuild"
 S="$ROOT/sources/sky-qcacld"
 OUT="$ROOT/out/wifi-modules"
 LOG="$ROOT/vendor/wifi/build.log"
+# quiet the driver's debug traces (pr_err -> pr_debug) and the periodic RCPI error line; applied once, skipped when already present
+if ! git -C "$S" apply --reverse --check "$ROOT/tools/qcacld-quiet-debug.patch" 2>/dev/null; then git -C "$S" apply "$ROOT/tools/qcacld-quiet-debug.patch"; fi
 # fw-api headers (MiCode sky-t-oss 02e10575, sparse checkout in sources/dl-fwapi) are expected at src/fw-api
 [ -e "$S/src/fw-api/fw/athdefs.h" ] || ln -sfn ../../dl-fwapi/repo/fw-api "$S/src/fw-api"
 # Kbuild expects the icnss2 headers at <repo>/micode-sky-icnss2/include (original author layout)

@@ -1,0 +1,486 @@
+diff --git a/src/qca-wifi-host-cmn/os_if/linux/mlme/src/osif_cm_disconnect_rsp.c b/src/qca-wifi-host-cmn/os_if/linux/mlme/src/osif_cm_disconnect_rsp.c
+index eb0d43c..8853796 100644
+--- a/src/qca-wifi-host-cmn/os_if/linux/mlme/src/osif_cm_disconnect_rsp.c
++++ b/src/qca-wifi-host-cmn/os_if/linux/mlme/src/osif_cm_disconnect_rsp.c
+@@ -227,20 +227,20 @@ QDF_STATUS osif_disconnect_handler(struct wlan_objmgr_vdev *vdev,
+ 		return status;
+ 	}
+ 
+-	pr_err("sky-c2b: -> HDD pre_user_update\n");
++	pr_debug("sky-c2b: -> HDD pre_user_update\n");
+ 	osif_cm_disconnect_comp_ind(vdev, rsp, OSIF_PRE_USERSPACE_UPDATE);
+-	pr_err("sky-c2b: <- HDD pre_user_update\n");
+-	pr_err("sky-c2b: -> cfg80211_disconnected\n");
++	pr_debug("sky-c2b: <- HDD pre_user_update\n");
++	pr_debug("sky-c2b: -> cfg80211_disconnected\n");
+ 	osif_cm_indicate_disconnect(vdev, osif_priv->wdev->netdev,
+ 				    ieee80211_reason,
+ 				    locally_generated, rsp->ap_discon_ie.ptr,
+ 				    rsp->ap_discon_ie.len,
+ 				    qdf_mem_malloc_flags());
+-	pr_err("sky-c2b: <- cfg80211_disconnected\n");
++	pr_debug("sky-c2b: <- cfg80211_disconnected\n");
+ 
+-	pr_err("sky-c2b: -> HDD post_user_update\n");
++	pr_debug("sky-c2b: -> HDD post_user_update\n");
+ 	osif_cm_disconnect_comp_ind(vdev, rsp, OSIF_POST_USERSPACE_UPDATE);
+-	pr_err("sky-c2b: <- HDD post_user_update\n");
++	pr_debug("sky-c2b: <- HDD post_user_update\n");
+ 
+ 	return status;
+ }
+diff --git a/src/qca-wifi-host-cmn/umac/cmn_services/mgmt_txrx/dispatcher/src/wlan_mgmt_txrx_tgt_api.c b/src/qca-wifi-host-cmn/umac/cmn_services/mgmt_txrx/dispatcher/src/wlan_mgmt_txrx_tgt_api.c
+index d9ff262..909a219 100644
+--- a/src/qca-wifi-host-cmn/umac/cmn_services/mgmt_txrx/dispatcher/src/wlan_mgmt_txrx_tgt_api.c
++++ b/src/qca-wifi-host-cmn/umac/cmn_services/mgmt_txrx/dispatcher/src/wlan_mgmt_txrx_tgt_api.c
+@@ -1342,7 +1342,7 @@ QDF_STATUS tgt_mgmt_txrx_tx_completion_handler(
+ 	ota_comp_cb = mgmt_desc->tx_ota_cmpl_cb;
+ 	nbuf = mgmt_desc->nbuf;
+ 
+-	pr_err("sky-dbg7: mgmt_txrx_compl desc=%u status=%u tx_cb=%d ota_cb=%d ctx=%d\n",
++	pr_debug("sky-dbg7: mgmt_txrx_compl desc=%u status=%u tx_cb=%d ota_cb=%d ctx=%d\n",
+ 	       desc_id, status, tx_compl_cb ? 1 : 0, ota_comp_cb ? 1 : 0,
+ 	       mgmt_desc->context ? 1 : 0);
+ 
+diff --git a/src/qca-wifi-host-cmn/umac/mlme/connection_mgr/core/src/wlan_cm_disconnect.c b/src/qca-wifi-host-cmn/umac/mlme/connection_mgr/core/src/wlan_cm_disconnect.c
+index 7ce4f0e..e2eb44c 100644
+--- a/src/qca-wifi-host-cmn/umac/mlme/connection_mgr/core/src/wlan_cm_disconnect.c
++++ b/src/qca-wifi-host-cmn/umac/mlme/connection_mgr/core/src/wlan_cm_disconnect.c
+@@ -548,7 +548,7 @@ static QDF_STATUS cm_osif_disconn_notify_cb(struct scheduler_msg *msg)
+ 	if (!ctx)
+ 		return QDF_STATUS_E_FAILURE;
+ 
+-	pr_err("sky-c2: osif disconnect complete (deferred) vdev=%u cm_id=0x%x\n",
++	pr_debug("sky-c2: osif disconnect complete (deferred) vdev=%u cm_id=0x%x\n",
+ 	       wlan_vdev_get_id(ctx->vdev), ctx->resp.req.cm_id);
+ 	mlme_cm_osif_disconnect_complete(ctx->vdev, &ctx->resp);
+ 	wlan_objmgr_vdev_release_ref(ctx->vdev, WLAN_MLME_CM_ID);
+@@ -588,7 +588,7 @@ static void cm_queue_osif_disconnect_notify(struct wlan_objmgr_vdev *vdev,
+ 		qdf_mem_free(ctx);
+ 		return;
+ 	}
+-	pr_err("sky-c2: queued osif disconnect notify vdev=%u cm_id=0x%x\n",
++	pr_debug("sky-c2: queued osif disconnect notify vdev=%u cm_id=0x%x\n",
+ 	       wlan_vdev_get_id(vdev), resp->req.cm_id);
+ }
+ 
+@@ -857,7 +857,7 @@ QDF_STATUS cm_disconnect_rsp(struct wlan_objmgr_vdev *vdev,
+ 	cm_id = cm_ctx->active_cm_id;
+ 	prefix = CM_ID_GET_PREFIX(cm_id);
+ 
+-	pr_err("sky-dbgC: cm_disconnect_rsp active_cm_id=0x%x resp_cm_id=0x%x prefix=0x%x\n",
++	pr_debug("sky-dbgC: cm_disconnect_rsp active_cm_id=0x%x resp_cm_id=0x%x prefix=0x%x\n",
+ 	       cm_id, resp->req.cm_id, prefix);
+ 	if (prefix != DISCONNECT_REQ_PREFIX || cm_id != resp->req.cm_id) {
+ 		mlme_err(CM_PREFIX_FMT "Active cm_id 0x%x is different",
+@@ -866,12 +866,12 @@ QDF_STATUS cm_disconnect_rsp(struct wlan_objmgr_vdev *vdev,
+ 		qdf_status = QDF_STATUS_E_FAILURE;
+ 		goto disconnect_complete;
+ 	}
+-	pr_err("sky-dbgC: -> cm_sm_deliver_event(DISCONNECT_DONE)\n");
++	pr_debug("sky-dbgC: -> cm_sm_deliver_event(DISCONNECT_DONE)\n");
+ 	qdf_status =
+ 		cm_sm_deliver_event(vdev,
+ 				    WLAN_CM_SM_EV_DISCONNECT_DONE,
+ 				    sizeof(*resp), resp);
+-	pr_err("sky-dbgC: <- cm_sm_deliver_event status=%d\n", qdf_status);
++	pr_debug("sky-dbgC: <- cm_sm_deliver_event status=%d\n", qdf_status);
+ 	if (QDF_IS_STATUS_ERROR(qdf_status))
+ 		goto disconnect_complete;
+ 
+@@ -883,9 +883,9 @@ disconnect_complete:
+ 	 * DISCONNECTING (some new cmd has changed the state of SM), so just
+ 	 * complete the disconnect command.
+ 	 */
+-	pr_err("sky-dbgC: -> cm_disconnect_complete\n");
++	pr_debug("sky-dbgC: -> cm_disconnect_complete\n");
+ 	qdf_status = cm_disconnect_complete(cm_ctx, resp);
+-	pr_err("sky-dbgC: <- cm_disconnect_complete status=%d\n", qdf_status);
++	pr_debug("sky-dbgC: <- cm_disconnect_complete status=%d\n", qdf_status);
+ 	return qdf_status;
+ }
+ 
+diff --git a/src/qcacld-3.0/components/umac/mlme/connection_mgr/core/src/wlan_cm_vdev_disconnect.c b/src/qcacld-3.0/components/umac/mlme/connection_mgr/core/src/wlan_cm_vdev_disconnect.c
+index 5d24730..8d7eb82 100644
+--- a/src/qcacld-3.0/components/umac/mlme/connection_mgr/core/src/wlan_cm_vdev_disconnect.c
++++ b/src/qcacld-3.0/components/umac/mlme/connection_mgr/core/src/wlan_cm_vdev_disconnect.c
+@@ -379,10 +379,10 @@ QDF_STATUS cm_handle_disconnect_resp(struct scheduler_msg *msg)
+ 		return QDF_STATUS_E_INVAL;
+ 	}
+ 
+-	pr_err("sky-dbgB: cm_handle_disconnect_resp ENTER vdev=%u\n", ind->vdev_id);
++	pr_debug("sky-dbgB: cm_handle_disconnect_resp ENTER vdev=%u\n", ind->vdev_id);
+ 	qdf_mem_zero(&resp, sizeof(resp));
+ 	status = cm_fill_disconnect_resp(vdev, &resp);
+-	pr_err("sky-dbgB: cm_fill_disconnect_resp status=%d\n", status);
++	pr_debug("sky-dbgB: cm_fill_disconnect_resp status=%d\n", status);
+ 	if (QDF_IS_STATUS_ERROR(status)) {
+ 		mlme_err("Active disconnect not found for vdev %d",
+ 			 ind->vdev_id);
+@@ -394,9 +394,9 @@ QDF_STATUS cm_handle_disconnect_resp(struct scheduler_msg *msg)
+ 	if (resp.req.req.source == CM_PEER_DISCONNECT)
+ 		cm_copy_peer_disconnect_ies(vdev, &resp.ap_discon_ie);
+ 
+-	pr_err("sky-dbgB: calling wlan_cm_disconnect_rsp\n");
++	pr_debug("sky-dbgB: calling wlan_cm_disconnect_rsp\n");
+ 	status = wlan_cm_disconnect_rsp(vdev, &resp);
+-	pr_err("sky-dbgB: wlan_cm_disconnect_rsp status=%d\n", status);
++	pr_debug("sky-dbgB: wlan_cm_disconnect_rsp status=%d\n", status);
+ 	mlme_free_peer_disconnect_ies(vdev);
+ 	wlan_objmgr_vdev_release_ref(vdev, WLAN_MLME_CM_ID);
+ 
+diff --git a/src/qcacld-3.0/core/dp/htt/htt_t2h.c b/src/qcacld-3.0/core/dp/htt/htt_t2h.c
+index 3df4448..5ad67bf 100644
+--- a/src/qcacld-3.0/core/dp/htt/htt_t2h.c
++++ b/src/qcacld-3.0/core/dp/htt/htt_t2h.c
+@@ -461,7 +461,7 @@ static void htt_t2h_lp_msg_handler(void *context, qdf_nbuf_t htt_t2h_msg,
+ 		int32_t credit_delta = 1;
+ 		int msg_len = qdf_nbuf_len(htt_t2h_msg);
+ 
+-		pr_err("sky-dbg4: MGMT_TX_COMPL_IND arrived len=%d mgmt_over_wmi=%d\n",
++		pr_debug("sky-dbg4: MGMT_TX_COMPL_IND arrived len=%d mgmt_over_wmi=%d\n",
+ 		       msg_len, ol_tx_get_is_mgmt_over_wmi_enabled());
+ 		if (msg_len < (sizeof(struct htt_mgmt_tx_compl_ind) + sizeof(*msg_word))) {
+ 			QDF_TRACE(QDF_MODULE_ID_HTT, QDF_TRACE_LEVEL_ERROR,
+diff --git a/src/qcacld-3.0/core/dp/txrx/ol_tx_send.c b/src/qcacld-3.0/core/dp/txrx/ol_tx_send.c
+index 3c19f09..b1bc791 100644
+--- a/src/qcacld-3.0/core/dp/txrx/ol_tx_send.c
++++ b/src/qcacld-3.0/core/dp/txrx/ol_tx_send.c
+@@ -1034,7 +1034,7 @@ ol_tx_completion_handler(ol_txrx_pdev_handle pdev,
+ 		static unsigned int sky_txc_cnt;
+ 
+ 		if (sky_txc_cnt < 8 || (sky_txc_cnt % 512) == 0)
+-			pr_err("sky-dbg3: tx_compl #%u num_msdus=%d status=%d\n",
++			pr_debug("sky-dbg3: tx_compl #%u num_msdus=%d status=%d\n",
+ 			       sky_txc_cnt, num_msdus, status);
+ 		sky_txc_cnt++;
+ 	}
+diff --git a/src/qcacld-3.0/core/hdd/src/wlan_hdd_cm_disconnect.c b/src/qcacld-3.0/core/hdd/src/wlan_hdd_cm_disconnect.c
+index 52f8f1d..e8e384d 100644
+--- a/src/qcacld-3.0/core/hdd/src/wlan_hdd_cm_disconnect.c
++++ b/src/qcacld-3.0/core/hdd/src/wlan_hdd_cm_disconnect.c
+@@ -321,35 +321,35 @@ hdd_cm_disconnect_complete_pre_user_update(struct wlan_objmgr_vdev *vdev,
+ 		return QDF_STATUS_E_INVAL;
+ 	}
+ 
+-	pr_err("sky-c2c: [1/6] -> hdd_conn_set_authenticated vdev=%u cm_id=0x%x\n",
++	pr_debug("sky-c2c: [1/6] -> hdd_conn_set_authenticated vdev=%u cm_id=0x%x\n",
+ 	       wlan_vdev_get_id(vdev), rsp->req.cm_id);
+ 	hdd_conn_set_authenticated(adapter, false);
+-	pr_err("sky-c2c: [1/6] <- hdd_conn_set_authenticated\n");
++	pr_debug("sky-c2c: [1/6] <- hdd_conn_set_authenticated\n");
+ 
+-	pr_err("sky-c2c: [2/6] -> hdd_napi_serialize\n");
++	pr_debug("sky-c2c: [2/6] -> hdd_napi_serialize\n");
+ 	hdd_napi_serialize(0);
+-	pr_err("sky-c2c: [2/6] <- hdd_napi_serialize\n");
++	pr_debug("sky-c2c: [2/6] <- hdd_napi_serialize\n");
+ 
+-	pr_err("sky-c2c: [3/6] -> hdd_disable_and_flush_mc_addr_list\n");
++	pr_debug("sky-c2c: [3/6] -> hdd_disable_and_flush_mc_addr_list\n");
+ 	hdd_disable_and_flush_mc_addr_list(adapter, pmo_peer_disconnect);
+-	pr_err("sky-c2c: [3/6] <- hdd_disable_and_flush_mc_addr_list\n");
++	pr_debug("sky-c2c: [3/6] <- hdd_disable_and_flush_mc_addr_list\n");
+ 
+-	pr_err("sky-c2c: [4/6] -> __hdd_cm_disconnect_handler_pre_user_update\n");
++	pr_debug("sky-c2c: [4/6] -> __hdd_cm_disconnect_handler_pre_user_update\n");
+ 	__hdd_cm_disconnect_handler_pre_user_update(adapter);
+-	pr_err("sky-c2c: [4/6] <- __hdd_cm_disconnect_handler_pre_user_update\n");
++	pr_debug("sky-c2c: [4/6] <- __hdd_cm_disconnect_handler_pre_user_update\n");
+ 
+-	pr_err("sky-c2c: [5/6] -> hdd_handle_disassociation_event\n");
++	pr_debug("sky-c2c: [5/6] -> hdd_handle_disassociation_event\n");
+ 	hdd_handle_disassociation_event(adapter, &rsp->req.req.bssid);
+-	pr_err("sky-c2c: [5/6] <- hdd_handle_disassociation_event\n");
++	pr_debug("sky-c2c: [5/6] <- hdd_handle_disassociation_event\n");
+ 
+ 	wlan_rec_conn_info(adapter->vdev_id, DEBUG_CONN_DISCONNECT_HANDLER,
+ 			   rsp->req.req.bssid.bytes,
+ 			   rsp->req.cm_id,
+ 			   rsp->req.req.reason_code << 16 |
+ 			   rsp->req.req.source);
+-	pr_err("sky-c2c: [6/6] -> hdd_ipa_set_tx_flow_info\n");
++	pr_debug("sky-c2c: [6/6] -> hdd_ipa_set_tx_flow_info\n");
+ 	hdd_ipa_set_tx_flow_info();
+-	pr_err("sky-c2c: [6/6] <- hdd_ipa_set_tx_flow_info\n");
++	pr_debug("sky-c2c: [6/6] <- hdd_ipa_set_tx_flow_info\n");
+ 	/*
+ 	 * Convert and cache internal reason code in adapter. This can be
+ 	 * sent to userspace with a vendor event.
+diff --git a/src/qcacld-3.0/core/hdd/src/wlan_hdd_driver_ops.c b/src/qcacld-3.0/core/hdd/src/wlan_hdd_driver_ops.c
+index 4e97ab4..ad38e3a 100644
+--- a/src/qcacld-3.0/core/hdd/src/wlan_hdd_driver_ops.c
++++ b/src/qcacld-3.0/core/hdd/src/wlan_hdd_driver_ops.c
+@@ -602,12 +602,12 @@ static int __hdd_soc_probe(struct device *dev,
+ 	cds_set_recovery_in_progress(false);
+ 
+ 	errno = hdd_init_qdf_ctx(dev, bdev, bus_type, bid);
+-	pr_err("sky-dbg: hdd_init_qdf_ctx=%d\n", errno);
++	pr_debug("sky-dbg: hdd_init_qdf_ctx=%d\n", errno);
+ 	if (errno)
+ 		goto unlock;
+ 
+ 	errno = hdd_init_dma_mask(dev, bus_type);
+-	pr_err("sky-dbg: hdd_init_dma_mask=%d\n", errno);
++	pr_debug("sky-dbg: hdd_init_dma_mask=%d\n", errno);
+ 	if (errno)
+ 		goto unlock;
+ 
+@@ -617,9 +617,9 @@ static int __hdd_soc_probe(struct device *dev,
+ 		goto assert_fail_count;
+ 	}
+ 
+-	pr_err("sky-dbg: hdd_context_create ok\n");
++	pr_debug("sky-dbg: hdd_context_create ok\n");
+ 	status = dp_prealloc_init((struct cdp_ctrl_objmgr_psoc *)hdd_ctx->psoc);
+-	pr_err("sky-dbg: dp_prealloc_init=%d\n", status);
++	pr_debug("sky-dbg: dp_prealloc_init=%d\n", status);
+ 
+ 	if (status != QDF_STATUS_SUCCESS) {
+ 		errno = qdf_status_to_os_return(status);
+@@ -627,12 +627,12 @@ static int __hdd_soc_probe(struct device *dev,
+ 	}
+ 
+ 	errno = hdd_wlan_startup(hdd_ctx);
+-	pr_err("sky-dbg: hdd_wlan_startup=%d\n", errno);
++	pr_debug("sky-dbg: hdd_wlan_startup=%d\n", errno);
+ 	if (errno)
+ 		goto hdd_context_destroy;
+ 
+ 	status = hdd_psoc_create_vdevs(hdd_ctx);
+-	pr_err("sky-dbg: hdd_psoc_create_vdevs=%d\n", status);
++	pr_debug("sky-dbg: hdd_psoc_create_vdevs=%d\n", status);
+ 	if (QDF_IS_STATUS_ERROR(status)) {
+ 		errno = qdf_status_to_os_return(status);
+ 		goto wlan_exit;
+@@ -696,7 +696,7 @@ static int hdd_soc_probe(struct device *dev,
+ 	hdd_info("probing driver");
+ 
+ 	errno = osif_psoc_sync_create_and_trans(&psoc_sync);
+-	pr_err("sky-dbg: osif_psoc_sync_create_and_trans=%d\n", errno);
++	pr_debug("sky-dbg: osif_psoc_sync_create_and_trans=%d\n", errno);
+ 	if (errno)
+ 		return errno;
+ 
+diff --git a/src/qcacld-3.0/core/hdd/src/wlan_hdd_main.c b/src/qcacld-3.0/core/hdd/src/wlan_hdd_main.c
+index 75859b1..15ea185 100644
+--- a/src/qcacld-3.0/core/hdd/src/wlan_hdd_main.c
++++ b/src/qcacld-3.0/core/hdd/src/wlan_hdd_main.c
+@@ -13593,7 +13593,7 @@ struct hdd_context *hdd_context_create(struct device *dev)
+ 	hdd_enter();
+ 
+ 	hdd_ctx = hdd_cfg80211_wiphy_alloc();
+-	pr_err("sky-dbg2: wiphy_alloc=%s\n", IS_ERR_OR_NULL(hdd_ctx) ? "FAIL" : "ok");
++	pr_debug("sky-dbg2: wiphy_alloc=%s\n", IS_ERR_OR_NULL(hdd_ctx) ? "FAIL" : "ok");
+ 	if (!hdd_ctx) {
+ 		ret = -ENOMEM;
+ 		goto err_out;
+@@ -13616,9 +13616,9 @@ struct hdd_context *hdd_context_create(struct device *dev)
+ 		goto err_free_hdd_context;
+ 	}
+ 
+-	pr_err("sky-dbg2: pre-cfg_parse (%s)\n", WLAN_INI_FILE);
++	pr_debug("sky-dbg2: pre-cfg_parse (%s)\n", WLAN_INI_FILE);
+ 	status = cfg_parse(WLAN_INI_FILE);
+-	pr_err("sky-dbg2: cfg_parse=%d\n", status);
++	pr_debug("sky-dbg2: cfg_parse=%d\n", status);
+ 	if (QDF_IS_STATUS_ERROR(status)) {
+ 		hdd_err("Failed to parse cfg %s; status:%d\n",
+ 			WLAN_INI_FILE, status);
+@@ -13630,9 +13630,9 @@ struct hdd_context *hdd_context_create(struct device *dev)
+ 
+ 	status = hdd_cfg_parse_connection_roaming_cfg();
+ 
+-	pr_err("sky-dbg2: roaming_cfg=%d\n", status);
++	pr_debug("sky-dbg2: roaming_cfg=%d\n", status);
+ 	ret = hdd_objmgr_create_and_store_psoc(hdd_ctx, DEFAULT_PSOC_ID);
+-	pr_err("sky-dbg2: objmgr_create=%d\n", ret);
++	pr_debug("sky-dbg2: objmgr_create=%d\n", ret);
+ 	if (ret) {
+ 		QDF_DEBUG_PANIC("Psoc creation fails!");
+ 		goto err_release_store;
+@@ -13652,7 +13652,7 @@ struct hdd_context *hdd_context_create(struct device *dev)
+ 	hdd_override_ini_config(hdd_ctx);
+ 
+ 	ret = hdd_context_init(hdd_ctx);
+-	pr_err("sky-dbg2: hdd_context_init=%d\n", ret);
++	pr_debug("sky-dbg2: hdd_context_init=%d\n", ret);
+ 
+ 	if (ret)
+ 		goto err_hdd_objmgr_destroy;
+@@ -13662,7 +13662,7 @@ struct hdd_context *hdd_context_create(struct device *dev)
+ 
+ 	cds_set_multicast_logging(hdd_ctx->config->multicast_host_fw_msgs);
+ 	ret = hdd_init_netlink_services(hdd_ctx);
+-	pr_err("sky-dbg2: netlink_services=%d\n", ret);
++	pr_debug("sky-dbg2: netlink_services=%d\n", ret);
+ 	if (ret)
+ 		goto err_deinit_hdd_context;
+ 
+diff --git a/src/qcacld-3.0/core/hdd/src/wlan_hdd_stats.c b/src/qcacld-3.0/core/hdd/src/wlan_hdd_stats.c
+index 00766dc..434fbc2 100644
+--- a/src/qcacld-3.0/core/hdd/src/wlan_hdd_stats.c
++++ b/src/qcacld-3.0/core/hdd/src/wlan_hdd_stats.c
+@@ -6470,7 +6470,7 @@ static bool hdd_is_rcpi_applicable(struct hdd_adapter *adapter,
+ 
+ 		if (qdf_mem_cmp(mac_addr, &hdd_sta_ctx->conn_info.bssid,
+ 				sizeof(*mac_addr))) {
+-			hdd_err("mac addr is different from bssid connected");
++			hdd_debug("mac addr is different from bssid connected");
+ 			return false;
+ 		}
+ 	} else if (adapter->device_mode == QDF_SAP_MODE ||
+diff --git a/src/qcacld-3.0/core/mac/src/pe/lim/lim_process_message_queue.c b/src/qcacld-3.0/core/mac/src/pe/lim/lim_process_message_queue.c
+index 652f642..8566cdc 100644
+--- a/src/qcacld-3.0/core/mac/src/pe/lim/lim_process_message_queue.c
++++ b/src/qcacld-3.0/core/mac/src/pe/lim/lim_process_message_queue.c
+@@ -1934,7 +1934,7 @@ static void lim_process_messages(struct mac_context *mac_ctx,
+ 					     msg->bodyptr);
+ 		break;
+ 	case WMA_DEAUTH_TX_COMP:
+-		pr_err("sky-dbgA: LIM got WMA_DEAUTH_TX_COMP bodyval=%u bodyptr=%px\n",
++		pr_debug("sky-dbgA: LIM got WMA_DEAUTH_TX_COMP bodyval=%u bodyptr=%px\n",
+ 		       msg->bodyval, msg->bodyptr);
+ 		lim_deauth_tx_complete_cnf(mac_ctx, msg->bodyval,
+ 					   msg->bodyptr);
+diff --git a/src/qcacld-3.0/core/mac/src/pe/lim/lim_process_sme_req_messages.c b/src/qcacld-3.0/core/mac/src/pe/lim/lim_process_sme_req_messages.c
+index 8330685..c03ccbc 100644
+--- a/src/qcacld-3.0/core/mac/src/pe/lim/lim_process_sme_req_messages.c
++++ b/src/qcacld-3.0/core/mac/src/pe/lim/lim_process_sme_req_messages.c
+@@ -4249,7 +4249,7 @@ lim_cm_handle_disconnect_req(struct wlan_cm_vdev_discon_req *req)
+ 	if (!mac_ctx)
+ 		return QDF_STATUS_E_INVAL;
+ 
+-	pr_err("sky-dbg3: disconnect_req vdev=%d cm_id=0x%x source=%d\n",
++	pr_debug("sky-dbg3: disconnect_req vdev=%d cm_id=0x%x source=%d\n",
+ 	       req->req.vdev_id, req->cm_id, req->req.source);
+ 	pe_session = lim_get_disconnect_session(mac_ctx, req);
+ 	if (!pe_session) {
+diff --git a/src/qcacld-3.0/core/mac/src/pe/lim/lim_send_management_frames.c b/src/qcacld-3.0/core/mac/src/pe/lim/lim_send_management_frames.c
+index f7a3721..7bd8ab0 100644
+--- a/src/qcacld-3.0/core/mac/src/pe/lim/lim_send_management_frames.c
++++ b/src/qcacld-3.0/core/mac/src/pe/lim/lim_send_management_frames.c
+@@ -3477,7 +3477,7 @@ alloc_packet:
+ 
+ QDF_STATUS lim_send_deauth_cnf(struct mac_context *mac_ctx)
+ {
+-	pr_err("sky-dbgA: lim_send_deauth_cnf entry pMlmDeauthReq=%s\n",
++	pr_debug("sky-dbgA: lim_send_deauth_cnf entry pMlmDeauthReq=%s\n",
+ 	       mac_ctx->lim.limDisassocDeauthCnfReq.pMlmDeauthReq ? "set" : "NULL");
+ 	uint16_t aid;
+ 	tpDphHashNode sta_ds;
+@@ -3696,7 +3696,7 @@ QDF_STATUS lim_disassoc_tx_complete_cnf(void *context,
+ 					uint32_t tx_success,
+ 					void *params)
+ {
+-	pr_err("sky-dbg8: lim_disassoc_tx_complete_cnf tx_success=%u\n", tx_success);
++	pr_debug("sky-dbg8: lim_disassoc_tx_complete_cnf tx_success=%u\n", tx_success);
+ 	struct mac_context *max_ctx = (struct mac_context *)context;
+ 
+ 	pe_debug("tx_success: %d", tx_success);
+@@ -3709,7 +3709,7 @@ static QDF_STATUS lim_disassoc_tx_complete_cnf_handler(void *context,
+ 						       uint32_t tx_success,
+ 						       void *params)
+ {
+-	pr_err("sky-dbg8: disassoc_tx_complete_cnf_handler tx_success=%u buf=%s ctx=%px params=%px\n",
++	pr_debug("sky-dbg8: disassoc_tx_complete_cnf_handler tx_success=%u buf=%s ctx=%px params=%px\n",
+ 	       tx_success, buf ? "yes" : "no", context, params);
+ 	struct mac_context *max_ctx = (struct mac_context *)context;
+ 	QDF_STATUS status_code;
+@@ -3728,7 +3728,7 @@ static QDF_STATUS lim_disassoc_tx_complete_cnf_handler(void *context,
+ 	msg.bodyval = tx_success;
+ 
+ 	status_code = lim_post_msg_high_priority(max_ctx, &msg);
+-	pr_err("sky-dbg8: post WMA_DISASSOC_TX_COMP ret=%d\n", status_code);
++	pr_debug("sky-dbg8: post WMA_DISASSOC_TX_COMP ret=%d\n", status_code);
+ 	if (status_code != QDF_STATUS_SUCCESS)
+ 		pe_err("posting message: %X to LIM failed, reason: %d",
+ 		       msg.type, status_code);
+@@ -3739,7 +3739,7 @@ QDF_STATUS lim_deauth_tx_complete_cnf(void *context,
+ 				      uint32_t tx_success,
+ 				      void *params)
+ {
+-	pr_err("sky-dbg9: lim_deauth_tx_complete_cnf tx_success=%u ctx=%px\n",
++	pr_debug("sky-dbg9: lim_deauth_tx_complete_cnf tx_success=%u ctx=%px\n",
+ 	       tx_success, context);
+ 	struct mac_context *mac_ctx = (struct mac_context *)context;
+ 
+@@ -3753,7 +3753,7 @@ static QDF_STATUS lim_deauth_tx_complete_cnf_handler(void *context,
+ 						     uint32_t tx_success,
+ 						     void *params)
+ {
+-	pr_err("sky-dbg9: deauth_tx_complete_cnf_handler tx_success=%u buf=%s ctx=%px params=%px\n",
++	pr_debug("sky-dbg9: deauth_tx_complete_cnf_handler tx_success=%u buf=%s ctx=%px params=%px\n",
+ 	       tx_success, buf ? "yes" : "no", context, params);
+ 	struct mac_context *mac_ctx = (struct mac_context *)context;
+ 	QDF_STATUS status_code;
+@@ -3777,7 +3777,7 @@ static QDF_STATUS lim_deauth_tx_complete_cnf_handler(void *context,
+ 		session = pe_find_session_by_session_id(mac_ctx,
+ 				deauth_req->sessionId);
+ 
+-	pr_err("sky-dbgA: deauth_compl_handler tx_success=%u pMlmDeauthReq=%s session=%s retry=%u\n",
++	pr_debug("sky-dbgA: deauth_compl_handler tx_success=%u pMlmDeauthReq=%s session=%s retry=%u\n",
+ 	       tx_success, deauth_req ? "set" : "NULL",
+ 	       session ? "found" : "NULL",
+ 	       session ? session->deauth_retry.retry_cnt : 0);
+@@ -3799,7 +3799,7 @@ static QDF_STATUS lim_deauth_tx_complete_cnf_handler(void *context,
+ 	msg.bodyval = tx_success;
+ 
+ 	status_code = lim_post_msg_high_priority(mac_ctx, &msg);
+-	pr_err("sky-dbgA: posted WMA_DEAUTH_TX_COMP ret=%d bodyval=%u\n",
++	pr_debug("sky-dbgA: posted WMA_DEAUTH_TX_COMP ret=%d bodyval=%u\n",
+ 	       status_code, tx_success);
+ 	if (status_code != QDF_STATUS_SUCCESS)
+ 		pe_err("posting message: %X to LIM failed, reason: %d",
+diff --git a/src/qcacld-3.0/core/mac/src/pe/lim/lim_send_sme_rsp_messages.c b/src/qcacld-3.0/core/mac/src/pe/lim/lim_send_sme_rsp_messages.c
+index f19d5aa..34b8cac 100644
+--- a/src/qcacld-3.0/core/mac/src/pe/lim/lim_send_sme_rsp_messages.c
++++ b/src/qcacld-3.0/core/mac/src/pe/lim/lim_send_sme_rsp_messages.c
+@@ -763,7 +763,7 @@ void lim_cm_send_disconnect_rsp(struct mac_context *mac_ctx, uint8_t vdev_id)
+ 	{
+ 		static unsigned int sky_rsp_cnt;
+ 
+-		pr_err("sky-dbgA: lim_cm_send_disconnect_rsp #%u vdev=%u\n",
++		pr_debug("sky-dbgA: lim_cm_send_disconnect_rsp #%u vdev=%u\n",
+ 		       sky_rsp_cnt++, vdev_id);
+ 	}
+ 	QDF_STATUS status;
+diff --git a/src/qcacld-3.0/core/wma/src/wma_mgmt.c b/src/qcacld-3.0/core/wma/src/wma_mgmt.c
+index b056301..196d774 100644
+--- a/src/qcacld-3.0/core/wma/src/wma_mgmt.c
++++ b/src/qcacld-3.0/core/wma/src/wma_mgmt.c
+@@ -2780,14 +2780,14 @@ static int wma_process_mgmt_tx_completion(tp_wma_handle wma_handle,
+ 
+ 	buf = mgmt_txrx_get_nbuf(pdev, desc_id);
+ 
+-	pr_err("sky-dbg6: mgmt_compl_process desc_id=%u status=%u buf=%s\n",
++	pr_debug("sky-dbg6: mgmt_compl_process desc_id=%u status=%u buf=%s\n",
+ 	       desc_id, status, buf ? "found" : "NULL");
+ 	if (buf) {
+ 		uint8_t *fc = qdf_nbuf_data(buf);
+ 		uint16_t len = qdf_nbuf_len(buf);
+ 
+ 		if (fc && len >= 2)
+-			pr_err("sky-dbg6:   frame fc=0x%02x%02x type=%u sub=%u len=%u\n",
++			pr_debug("sky-dbg6:   frame fc=0x%02x%02x type=%u sub=%u len=%u\n",
+ 			       fc[1], fc[0], (fc[0] >> 2) & 0x3, (fc[0] >> 4) & 0xf, len);
+ 	}
+ 
+@@ -2802,7 +2802,7 @@ static int wma_process_mgmt_tx_completion(tp_wma_handle wma_handle,
+ 	ret = mgmt_txrx_tx_completion_handler(pdev, desc_id, status,
+ 					      &mgmt_params);
+ 
+-	pr_err("sky-dbg6: mgmt_txrx_tx_completion_handler ret=%d vdev=%d\n",
++	pr_debug("sky-dbg6: mgmt_txrx_tx_completion_handler ret=%d vdev=%d\n",
+ 	       ret, vdev_id);
+ 
+ 	if (ret != QDF_STATUS_SUCCESS) {
+@@ -2857,7 +2857,7 @@ int wma_mgmt_tx_completion_handler(void *handle, uint8_t *cmpl_event_params,
+ 	}
+ 	cmpl_params = param_buf->fixed_param;
+ 
+-	pr_err("sky-dbg5: WMI mgmt_tx_compl event desc_id=%u status=%u\n",
++	pr_debug("sky-dbg5: WMI mgmt_tx_compl event desc_id=%u status=%u\n",
+ 	       cmpl_params->desc_id, cmpl_params->status);
+ 
+ 	if ((ucfg_pkt_capture_get_pktcap_mode(wma_handle->psoc) &
