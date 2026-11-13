@@ -1,0 +1,13 @@
+# Pinned third-party inputs. Format: name | kind | location | pin
+# Checked by tools/fetch-sources.sh. Hashes of vendor files are in tools/vendor-files.sha256.
+linux-7.3        | tarball | https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.3.tar.xz | sha256 87363c24f10e06321eb362765521094e94471f6bff8bce2d6b3e40f39f004953
+toolchain        | tarball | https://mirrors.edge.kernel.org/pub/tools/crosstool/files/bin/x86_64/15.2.0/x86_64-gcc-15.2.0-nolibc-aarch64-linux.tar.xz | sha256 a3b99f6f979ed427d43fbb9cfabfa2ca40e2f4e830dff9a37520d828ebc63e4d
+sky-linux        | git     | https://github.com/orange200213/sky-linux.git | commit d78c42a27e403f8207e813e051f3b1e142ffb101
+audioreach-topology | git  | https://github.com/linux-msm/audioreach-topology.git | commit d6bb205aca5f4b8fa6b2f44cf8b5f6a081cbf037
+payload-dumper-go | tarball | https://github.com/ssut/payload-dumper-go/releases/download/2.1.0/payload-dumper-go_2.1.0_linux_amd64.tar.gz | sha256 bbbb53a71955c69272afdef7bc7e83a1bb1770f453d0c21dcaf61a3ba0463c11
+PixelOS ROM      | manual  | https://sourceforge.net/projects/pixelos-releases/files/fourteen/sky/PixelOS_sky-14.0-20240922-0137.zip/download | sha256 f37e76809187646b24408fda323f8f11851d347f30969fc17d295b19bc8e3b48
+# --- only for the optional root filesystem extras (tools/fetch-sources.sh --rootfs); not verified from a clean checkout, see docs/en/KNOWN-ISSUES.md
+sky-qcacld       | git     | https://github.com/orange200213/sky-qcacld-3.0-mainline | commit 978c4671050f99ae61fe7dcd97751b6eb9bb0f50
+fw-api           | git     | https://github.com/MiCode/vendor_qcom_opensource_wlan.git | commit 02e10575f1357db03d74b9d59a1edd3a88614181 (sparse: fw-api/)
+evdi             | git     | https://github.com/DisplayLink/evdi | commit 8acd0b28230d271cc338bc3b2f201fb696dbd286
+DisplayLink driver | manual | https://www.synaptics.com/products/displaylink-graphics/downloads/ubuntu  ("USB Graphics Software for Ubuntu 6.4") | vendor download, never redistributed

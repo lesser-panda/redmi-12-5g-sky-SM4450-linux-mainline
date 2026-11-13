@@ -1,0 +1,9 @@
+# Root package set for the Debian trixie arm64 rootfs (input of tools/deb-fetch.py; Depends/Pre-Depends closure, no Recommends).
+# Fetch:  python3 -I tools/deb-fetch.py sources/dl-debian $(grep -v '^#' tools/debian-roots.txt)    then rebuild with tools/build-debian-stage1.py / tools/push-debian.sh.
+# Original set (E021):
+gnome-core gdm3 systemd-sysv udev dbus-user-session network-manager wpasupplicant bluez iw openssh-server sudo locales xwayland libgl1-mesa-dri polkitd pipewire-audio iio-sensor-proxy ca-certificates
+# Added by hand on the phone after E021 (from its apt history) and now part of the set (E031):
+alsa-utils alsa-ucm-conf gpiod i2c-tools usbutils evtest systemd-timesyncd iproute2 iputils-ping strace unzip
+# Everyday tools (E031): browser (Debian ships firefox-esr, not firefox), GNOME extension support, Flatpak, editors, shell comfort
+firefox-esr gnome-browser-connector gnome-shell-extension-manager gnome-tweaks flatpak gnome-software gnome-software-plugin-flatpak fuse3
+curl wget git fastfetch htop nano vim zip rsync file tmux pciutils bash-completion fonts-noto-core fonts-noto-color-emoji
