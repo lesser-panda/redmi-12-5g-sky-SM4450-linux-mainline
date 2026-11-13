@@ -100,3 +100,7 @@
 - 2026-11-13: publication prep: docs/PUBLISHING.md (decisions, plan), tools/release-scan.sh (privacy/licence scan), LICENSES/ (GPL-2.0-only, MIT); 2 personal-data hits fixed. Nothing pushed.
 - 2026-11-13 E035: clean-checkout build of the published tree (release/) booted from RAM: Debian, fs1599 preset loaded, card/GPU/display/input/BT up; out-of-tree modules (qcacld, evdi) fail on the new kernel build as expected; AUTOROOT=0 variant built, not booted. See EXPERIMENT-011.md.
 - 2026-11-13 E036: m25 (RTC_SYSTOHC off, rate-limited SPMI message, 22 thermal zones, quiet qcacld) RAM-booted: SPMI spam 0, zones read 30-60 C under load, WiFi/BT fine. recovery_b still m24; persisting m25 awaits the user's go. See EXPERIMENT-012.md.
+- 2026-11-13 E037: touch keyboard = built-in GNOME OSK + extension sky-osk (portrait QWERTY, landscape split); installed and enabled on the phone, layouts checked by in-shell screenshots, typing not yet tried by the user. Docs: docs/EXPERIMENT-013.md, release/docs/en/KEYBOARD.md.
+
+## 2026-11-13 touch keyboard revision 2 (E037)
+Ortholinear portrait (10 x 5 with Esc/Tab/Ctrl/Alt/arrows strip) and Planck-style split landscape (6+6, flush to edges, click-through transparent gap, Lower/Raise layers) installed on the running phone (m25 RAM boot) and synced to release/. Verified by screenshots and a shell actor-pick test; typing by touch not yet tested (user to try). Details: docs/EXPERIMENT-013.md.

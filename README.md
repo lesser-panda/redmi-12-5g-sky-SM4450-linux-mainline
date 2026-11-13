@@ -61,7 +61,7 @@ initramfs/       init script (USB gadget, ssh, safety reboot, autoroot, switch-r
 tools/           fetch, extract, build, boot, flash; rootfs build and install scripts; stress test
 rootfs/          files installed into the Debian root (UCM audio profile, services, GNOME defaults, DisplayLink glue)
 docs/en, docs/zh-CN    documentation
-docs/lab-notebook      the original experiment write-ups (E001-E036), dated, with failures kept
+docs/lab-notebook      the original experiment write-ups (E001-E037), dated, with failures kept
 LICENSES/        license texts
 ```
 

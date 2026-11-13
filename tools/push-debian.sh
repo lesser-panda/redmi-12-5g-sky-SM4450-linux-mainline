@@ -41,6 +41,8 @@ cat rootfs/sky-zram.service | $SSH 'cat > /mnt/deb/tmp/sky-zram.service'
 cat rootfs/90_sky-power.gschema.override | $SSH 'cat > /mnt/deb/tmp/90_sky-power.gschema.override'
 cat rootfs/61-sky-battery.hwdb | $SSH 'cat > /mnt/deb/tmp/61-sky-battery.hwdb'
 cat rootfs/10-sky-journal.conf | $SSH 'cat > /mnt/deb/tmp/10-sky-journal.conf'
+tools/build-sky-osk.sh   # layout JSON from tools/gen-sky-osk-layouts.py
+tar --owner=0 --group=0 -cf - -C rootfs sky-osk | $SSH 'tar -xf - -C /mnt/deb/tmp'
 # audio: UCM profile (the FS1599 amplifier is in the kernel, m24+)
 tar --owner=0 --group=0 -cf - -C audio ucm2 | $SSH 'tar -xf - -C /mnt/deb/tmp'
 cat rootfs/customize.sh | $SSH 'cat > /mnt/deb/tmp/customize.sh; chmod 755 /mnt/deb/tmp/customize.sh'

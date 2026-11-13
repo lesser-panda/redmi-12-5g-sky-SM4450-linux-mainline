@@ -1,0 +1,1210 @@
+{
+ "name": "sky split",
+ "locale": "us",
+ "levels": [
+  {
+   "level": "default",
+   "mode": "default",
+   "rows": [
+    [
+     {
+      "keyval": "0xff09",
+      "label": "Tab"
+     },
+     {
+      "strings": [
+       "q",
+       "1"
+      ]
+     },
+     {
+      "strings": [
+       "w",
+       "2"
+      ]
+     },
+     {
+      "strings": [
+       "e",
+       "3",
+       "è",
+       "é",
+       "ê",
+       "ë",
+       "ē"
+      ]
+     },
+     {
+      "strings": [
+       "r",
+       "4"
+      ]
+     },
+     {
+      "strings": [
+       "t",
+       "5"
+      ]
+     },
+     {
+      "strings": [
+       "​"
+      ],
+      "width": 7.5
+     },
+     {
+      "strings": [
+       "y",
+       "6",
+       "ÿ"
+      ]
+     },
+     {
+      "strings": [
+       "u",
+       "7",
+       "û",
+       "ü",
+       "ù",
+       "ú",
+       "ū"
+      ]
+     },
+     {
+      "strings": [
+       "i",
+       "8",
+       "î",
+       "ï",
+       "í",
+       "ī",
+       "ì"
+      ]
+     },
+     {
+      "strings": [
+       "o",
+       "9",
+       "ô",
+       "ö",
+       "ò",
+       "ó",
+       "œ",
+       "ø",
+       "ō",
+       "õ"
+      ]
+     },
+     {
+      "strings": [
+       "p",
+       "0"
+      ]
+     },
+     {
+      "action": "delete",
+      "iconName": "osk-delete-symbolic",
+      "width": 1
+     }
+    ],
+    [
+     {
+      "keyval": "0xff1b",
+      "label": "Esc"
+     },
+     {
+      "strings": [
+       "a",
+       "à",
+       "á",
+       "â",
+       "ä",
+       "æ",
+       "ã",
+       "å",
+       "ā"
+      ]
+     },
+     {
+      "strings": [
+       "s",
+       "ß",
+       "ś",
+       "š"
+      ]
+     },
+     {
+      "strings": [
+       "d"
+      ]
+     },
+     {
+      "strings": [
+       "f"
+      ]
+     },
+     {
+      "strings": [
+       "g"
+      ]
+     },
+     {
+      "strings": [
+       "​"
+      ],
+      "width": 7.5
+     },
+     {
+      "strings": [
+       "h"
+      ]
+     },
+     {
+      "strings": [
+       "j"
+      ]
+     },
+     {
+      "strings": [
+       "k"
+      ]
+     },
+     {
+      "strings": [
+       "l",
+       "ł"
+      ]
+     },
+     {
+      "strings": [
+       ";",
+       ":"
+      ]
+     },
+     {
+      "strings": [
+       "'",
+       "\""
+      ]
+     }
+    ],
+    [
+     {
+      "action": "levelSwitch",
+      "iconName": "osk-shift-symbolic",
+      "level": "shift",
+      "width": 1
+     },
+     {
+      "strings": [
+       "z",
+       "ž",
+       "ź",
+       "ż"
+      ]
+     },
+     {
+      "strings": [
+       "x"
+      ]
+     },
+     {
+      "strings": [
+       "c",
+       "ç",
+       "ć",
+       "č"
+      ]
+     },
+     {
+      "strings": [
+       "v"
+      ]
+     },
+     {
+      "strings": [
+       "b"
+      ]
+     },
+     {
+      "strings": [
+       "​"
+      ],
+      "width": 7.5
+     },
+     {
+      "strings": [
+       "n",
+       "ñ",
+       "ń"
+      ]
+     },
+     {
+      "strings": [
+       "m"
+      ]
+     },
+     {
+      "strings": [
+       ",",
+       "!",
+       "<"
+      ]
+     },
+     {
+      "strings": [
+       ".",
+       "?",
+       ">"
+      ]
+     },
+     {
+      "strings": [
+       "/",
+       "?"
+      ]
+     },
+     {
+      "keyval": "0xff0d",
+      "iconName": "osk-enter-symbolic"
+     }
+    ],
+    [
+     {
+      "action": "hide",
+      "iconName": "osk-hide-symbolic",
+      "width": 1
+     },
+     {
+      "keyval": "0xffe3",
+      "label": "Ctrl",
+      "action": "modifier"
+     },
+     {
+      "keyval": "0xffe9",
+      "label": "Alt",
+      "action": "modifier"
+     },
+     {
+      "keyval": "0xffeb",
+      "label": "Super",
+      "action": "modifier"
+     },
+     {
+      "action": "levelSwitch",
+      "label": "?123",
+      "level": "opt",
+      "width": 1
+     },
+     {
+      "strings": [
+       " "
+      ],
+      "width": 1
+     },
+     {
+      "strings": [
+       "​"
+      ],
+      "width": 7.5
+     },
+     {
+      "strings": [
+       " "
+      ],
+      "width": 1
+     },
+     {
+      "action": "levelSwitch",
+      "label": "Fn",
+      "level": "opt+shift",
+      "width": 1
+     },
+     {
+      "keyval": "0xff51",
+      "iconName": "go-previous-symbolic"
+     },
+     {
+      "keyval": "0xff54",
+      "iconName": "go-down-symbolic"
+     },
+     {
+      "keyval": "0xff52",
+      "iconName": "go-up-symbolic"
+     },
+     {
+      "keyval": "0xff53",
+      "iconName": "go-next-symbolic"
+     }
+    ]
+   ]
+  },
+  {
+   "level": "shift",
+   "mode": "latched",
+   "rows": [
+    [
+     {
+      "keyval": "0xff09",
+      "label": "Tab"
+     },
+     {
+      "strings": [
+       "Q"
+      ]
+     },
+     {
+      "strings": [
+       "W"
+      ]
+     },
+     {
+      "strings": [
+       "E",
+       "È",
+       "É",
+       "Ê",
+       "Ë",
+       "Ē"
+      ]
+     },
+     {
+      "strings": [
+       "R"
+      ]
+     },
+     {
+      "strings": [
+       "T"
+      ]
+     },
+     {
+      "strings": [
+       "​"
+      ],
+      "width": 7.5
+     },
+     {
+      "strings": [
+       "Y",
+       "Ÿ"
+      ]
+     },
+     {
+      "strings": [
+       "U",
+       "Û",
+       "Ü",
+       "Ù",
+       "Ú",
+       "Ū"
+      ]
+     },
+     {
+      "strings": [
+       "I",
+       "Î",
+       "Ï",
+       "Í",
+       "Ī",
+       "Ì"
+      ]
+     },
+     {
+      "strings": [
+       "O",
+       "Ô",
+       "Ö",
+       "Ò",
+       "Ó",
+       "Œ",
+       "Ø",
+       "Ō",
+       "Õ"
+      ]
+     },
+     {
+      "strings": [
+       "P"
+      ]
+     },
+     {
+      "action": "delete",
+      "iconName": "osk-delete-symbolic",
+      "width": 1
+     }
+    ],
+    [
+     {
+      "keyval": "0xff1b",
+      "label": "Esc"
+     },
+     {
+      "strings": [
+       "A",
+       "À",
+       "Á",
+       "Â",
+       "Ä",
+       "Æ",
+       "Ã",
+       "Å",
+       "Ā"
+      ]
+     },
+     {
+      "strings": [
+       "S",
+       "SS",
+       "Ś",
+       "Š"
+      ]
+     },
+     {
+      "strings": [
+       "D"
+      ]
+     },
+     {
+      "strings": [
+       "F"
+      ]
+     },
+     {
+      "strings": [
+       "G"
+      ]
+     },
+     {
+      "strings": [
+       "​"
+      ],
+      "width": 7.5
+     },
+     {
+      "strings": [
+       "H"
+      ]
+     },
+     {
+      "strings": [
+       "J"
+      ]
+     },
+     {
+      "strings": [
+       "K"
+      ]
+     },
+     {
+      "strings": [
+       "L",
+       "Ł"
+      ]
+     },
+     {
+      "strings": [
+       ":",
+       ";"
+      ]
+     },
+     {
+      "strings": [
+       "\"",
+       "'"
+      ]
+     }
+    ],
+    [
+     {
+      "action": "levelSwitch",
+      "iconName": "osk-shift-symbolic",
+      "level": "default",
+      "width": 1
+     },
+     {
+      "strings": [
+       "Z",
+       "Ž",
+       "Ź",
+       "Ż"
+      ]
+     },
+     {
+      "strings": [
+       "X"
+      ]
+     },
+     {
+      "strings": [
+       "C",
+       "Ç",
+       "Ć",
+       "Č"
+      ]
+     },
+     {
+      "strings": [
+       "V"
+      ]
+     },
+     {
+      "strings": [
+       "B"
+      ]
+     },
+     {
+      "strings": [
+       "​"
+      ],
+      "width": 7.5
+     },
+     {
+      "strings": [
+       "N",
+       "Ñ",
+       "Ń"
+      ]
+     },
+     {
+      "strings": [
+       "M"
+      ]
+     },
+     {
+      "strings": [
+       "<",
+       ","
+      ]
+     },
+     {
+      "strings": [
+       ">",
+       "."
+      ]
+     },
+     {
+      "strings": [
+       "?",
+       "/"
+      ]
+     },
+     {
+      "keyval": "0xff0d",
+      "iconName": "osk-enter-symbolic"
+     }
+    ],
+    [
+     {
+      "action": "hide",
+      "iconName": "osk-hide-symbolic",
+      "width": 1
+     },
+     {
+      "keyval": "0xffe3",
+      "label": "Ctrl",
+      "action": "modifier"
+     },
+     {
+      "keyval": "0xffe9",
+      "label": "Alt",
+      "action": "modifier"
+     },
+     {
+      "keyval": "0xffeb",
+      "label": "Super",
+      "action": "modifier"
+     },
+     {
+      "action": "levelSwitch",
+      "label": "?123",
+      "level": "opt",
+      "width": 1
+     },
+     {
+      "strings": [
+       " "
+      ],
+      "width": 1
+     },
+     {
+      "strings": [
+       "​"
+      ],
+      "width": 7.5
+     },
+     {
+      "strings": [
+       " "
+      ],
+      "width": 1
+     },
+     {
+      "action": "levelSwitch",
+      "label": "Fn",
+      "level": "opt+shift",
+      "width": 1
+     },
+     {
+      "keyval": "0xff51",
+      "iconName": "go-previous-symbolic"
+     },
+     {
+      "keyval": "0xff54",
+      "iconName": "go-down-symbolic"
+     },
+     {
+      "keyval": "0xff52",
+      "iconName": "go-up-symbolic"
+     },
+     {
+      "keyval": "0xff53",
+      "iconName": "go-next-symbolic"
+     }
+    ]
+   ]
+  },
+  {
+   "level": "opt",
+   "mode": "locked",
+   "rows": [
+    [
+     {
+      "keyval": "0xff09",
+      "label": "Tab"
+     },
+     {
+      "strings": [
+       "1"
+      ]
+     },
+     {
+      "strings": [
+       "2"
+      ]
+     },
+     {
+      "strings": [
+       "3"
+      ]
+     },
+     {
+      "strings": [
+       "4"
+      ]
+     },
+     {
+      "strings": [
+       "5"
+      ]
+     },
+     {
+      "strings": [
+       "​"
+      ],
+      "width": 7.5
+     },
+     {
+      "strings": [
+       "6"
+      ]
+     },
+     {
+      "strings": [
+       "7"
+      ]
+     },
+     {
+      "strings": [
+       "8"
+      ]
+     },
+     {
+      "strings": [
+       "9"
+      ]
+     },
+     {
+      "strings": [
+       "0"
+      ]
+     },
+     {
+      "action": "delete",
+      "iconName": "osk-delete-symbolic",
+      "width": 1
+     }
+    ],
+    [
+     {
+      "keyval": "0xff1b",
+      "label": "Esc"
+     },
+     {
+      "strings": [
+       "!"
+      ]
+     },
+     {
+      "strings": [
+       "@"
+      ]
+     },
+     {
+      "strings": [
+       "#"
+      ]
+     },
+     {
+      "strings": [
+       "$"
+      ]
+     },
+     {
+      "strings": [
+       "%"
+      ]
+     },
+     {
+      "strings": [
+       "​"
+      ],
+      "width": 7.5
+     },
+     {
+      "strings": [
+       "^"
+      ]
+     },
+     {
+      "strings": [
+       "&"
+      ]
+     },
+     {
+      "strings": [
+       "*"
+      ]
+     },
+     {
+      "strings": [
+       "("
+      ]
+     },
+     {
+      "strings": [
+       ")"
+      ]
+     },
+     {
+      "strings": [
+       "_",
+       "-"
+      ]
+     }
+    ],
+    [
+     {
+      "action": "levelSwitch",
+      "label": "=/<",
+      "level": "opt+shift",
+      "width": 1
+     },
+     {
+      "strings": [
+       "`",
+       "~"
+      ]
+     },
+     {
+      "strings": [
+       "-",
+       "_"
+      ]
+     },
+     {
+      "strings": [
+       "=",
+       "+"
+      ]
+     },
+     {
+      "strings": [
+       "\\",
+       "|"
+      ]
+     },
+     {
+      "strings": [
+       "'",
+       "\""
+      ]
+     },
+     {
+      "strings": [
+       "​"
+      ],
+      "width": 7.5
+     },
+     {
+      "strings": [
+       ";",
+       ":"
+      ]
+     },
+     {
+      "strings": [
+       "[",
+       "{"
+      ]
+     },
+     {
+      "strings": [
+       "]",
+       "}"
+      ]
+     },
+     {
+      "strings": [
+       ",",
+       "<"
+      ]
+     },
+     {
+      "strings": [
+       ".",
+       ">"
+      ]
+     },
+     {
+      "keyval": "0xff0d",
+      "iconName": "osk-enter-symbolic"
+     }
+    ],
+    [
+     {
+      "action": "hide",
+      "iconName": "osk-hide-symbolic",
+      "width": 1
+     },
+     {
+      "keyval": "0xffe3",
+      "label": "Ctrl",
+      "action": "modifier"
+     },
+     {
+      "keyval": "0xffe9",
+      "label": "Alt",
+      "action": "modifier"
+     },
+     {
+      "keyval": "0xffeb",
+      "label": "Super",
+      "action": "modifier"
+     },
+     {
+      "action": "levelSwitch",
+      "label": "ABC",
+      "level": "default",
+      "width": 1
+     },
+     {
+      "strings": [
+       " "
+      ],
+      "width": 1
+     },
+     {
+      "strings": [
+       "​"
+      ],
+      "width": 7.5
+     },
+     {
+      "strings": [
+       " "
+      ],
+      "width": 1
+     },
+     {
+      "action": "levelSwitch",
+      "label": "Fn",
+      "level": "opt+shift",
+      "width": 1
+     },
+     {
+      "keyval": "0xff51",
+      "iconName": "go-previous-symbolic"
+     },
+     {
+      "keyval": "0xff54",
+      "iconName": "go-down-symbolic"
+     },
+     {
+      "keyval": "0xff52",
+      "iconName": "go-up-symbolic"
+     },
+     {
+      "keyval": "0xff53",
+      "iconName": "go-next-symbolic"
+     }
+    ]
+   ]
+  },
+  {
+   "level": "opt+shift",
+   "mode": "locked",
+   "rows": [
+    [
+     {
+      "keyval": "0xff09",
+      "label": "Tab"
+     },
+     {
+      "keyval": "0xffbe",
+      "label": "F1"
+     },
+     {
+      "keyval": "0xffbf",
+      "label": "F2"
+     },
+     {
+      "keyval": "0xffc0",
+      "label": "F3"
+     },
+     {
+      "keyval": "0xffc1",
+      "label": "F4"
+     },
+     {
+      "keyval": "0xffc2",
+      "label": "F5"
+     },
+     {
+      "strings": [
+       "​"
+      ],
+      "width": 7.5
+     },
+     {
+      "keyval": "0xffc3",
+      "label": "F6"
+     },
+     {
+      "keyval": "0xffc4",
+      "label": "F7"
+     },
+     {
+      "keyval": "0xffc5",
+      "label": "F8"
+     },
+     {
+      "keyval": "0xffc6",
+      "label": "F9"
+     },
+     {
+      "keyval": "0xffc7",
+      "label": "F10"
+     },
+     {
+      "action": "delete",
+      "iconName": "osk-delete-symbolic",
+      "width": 1
+     }
+    ],
+    [
+     {
+      "keyval": "0xff1b",
+      "label": "Esc"
+     },
+     {
+      "keyval": "0xffc8",
+      "label": "F11"
+     },
+     {
+      "keyval": "0xffc9",
+      "label": "F12"
+     },
+     {
+      "keyval": "0xff55",
+      "label": "PgUp"
+     },
+     {
+      "keyval": "0xff56",
+      "label": "PgDn"
+     },
+     {
+      "keyval": "0xffff",
+      "label": "Del"
+     },
+     {
+      "strings": [
+       "​"
+      ],
+      "width": 7.5
+     },
+     {
+      "keyval": "0xff50",
+      "label": "Home"
+     },
+     {
+      "keyval": "0xff51",
+      "iconName": "go-previous-symbolic"
+     },
+     {
+      "keyval": "0xff54",
+      "iconName": "go-down-symbolic"
+     },
+     {
+      "keyval": "0xff52",
+      "iconName": "go-up-symbolic"
+     },
+     {
+      "keyval": "0xff53",
+      "iconName": "go-next-symbolic"
+     },
+     {
+      "keyval": "0xff57",
+      "label": "End"
+     }
+    ],
+    [
+     {
+      "action": "levelSwitch",
+      "label": "?123",
+      "level": "opt",
+      "width": 1
+     },
+     {
+      "action": "emoji",
+      "iconName": "osk-emoji-picker-symbolic",
+      "width": 1
+     },
+     {
+      "action": "languageMenu",
+      "iconName": "osk-layout-symbolic",
+      "width": 1
+     },
+     {
+      "strings": [
+       "("
+      ]
+     },
+     {
+      "strings": [
+       ")"
+      ]
+     },
+     {
+      "strings": [
+       "/"
+      ]
+     },
+     {
+      "strings": [
+       "​"
+      ],
+      "width": 7.5
+     },
+     {
+      "strings": [
+       "{"
+      ]
+     },
+     {
+      "strings": [
+       "}"
+      ]
+     },
+     {
+      "strings": [
+       "["
+      ]
+     },
+     {
+      "strings": [
+       "]"
+      ]
+     },
+     {
+      "strings": [
+       "?"
+      ]
+     },
+     {
+      "keyval": "0xff0d",
+      "iconName": "osk-enter-symbolic"
+     }
+    ],
+    [
+     {
+      "action": "hide",
+      "iconName": "osk-hide-symbolic",
+      "width": 1
+     },
+     {
+      "keyval": "0xffe3",
+      "label": "Ctrl",
+      "action": "modifier"
+     },
+     {
+      "keyval": "0xffe9",
+      "label": "Alt",
+      "action": "modifier"
+     },
+     {
+      "keyval": "0xffeb",
+      "label": "Super",
+      "action": "modifier"
+     },
+     {
+      "action": "levelSwitch",
+      "label": "?123",
+      "level": "opt",
+      "width": 1
+     },
+     {
+      "strings": [
+       " "
+      ],
+      "width": 1
+     },
+     {
+      "strings": [
+       "​"
+      ],
+      "width": 7.5
+     },
+     {
+      "strings": [
+       " "
+      ],
+      "width": 1
+     },
+     {
+      "action": "levelSwitch",
+      "label": "ABC",
+      "level": "default",
+      "width": 1
+     },
+     {
+      "keyval": "0xff51",
+      "iconName": "go-previous-symbolic"
+     },
+     {
+      "keyval": "0xff54",
+      "iconName": "go-down-symbolic"
+     },
+     {
+      "keyval": "0xff52",
+      "iconName": "go-up-symbolic"
+     },
+     {
+      "keyval": "0xff53",
+      "iconName": "go-next-symbolic"
+     }
+    ]
+   ]
+  }
+ ]
+}

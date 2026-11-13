@@ -1,0 +1,8 @@
+{
+  "uuid": "sky-osk@redmi-12-5g.local",
+  "name": "Sky touch keyboard",
+  "description": "Mobile-style layouts for GNOME's built-in on-screen keyboard: portrait QWERTY with digits on long press and a split two-thumb layout in landscape. Part of the Redmi 12 5G mainline bring-up.",
+  "shell-version": ["48"],
+  "session-modes": ["user", "unlock-dialog"],
+  "version": 1
+}

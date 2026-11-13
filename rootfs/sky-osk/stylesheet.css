@@ -1,0 +1,35 @@
+/* Sky touch keyboard: slightly smaller gaps and larger labels than the default theme, so thumbs hit the keys. */
+.key-container {
+    padding: 2px;
+    spacing: 2px;
+}
+
+.keyboard-key {
+    font-size: 15pt;
+    border-radius: 8px;
+}
+
+.keyboard-key StIcon {
+    icon-size: 20px;
+}
+
+/* no empty band above the keys when there are no word suggestions; a little room below the last row */
+.word-suggestions {
+    min-height: 0;
+    padding: 0;
+}
+
+#keyboard {
+    padding-bottom: 6px;
+}
+
+/* split layout: only the two key blocks are visible, the middle shows the app below */
+#keyboard.sky-split {
+    background-color: transparent;
+    box-shadow: none;
+}
+
+/* the emoji picker needs a solid background in both layouts */
+.emoji-panel {
+    background-color: #2d2d31;
+}

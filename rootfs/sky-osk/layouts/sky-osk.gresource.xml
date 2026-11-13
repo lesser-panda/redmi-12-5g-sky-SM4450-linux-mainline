@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="UTF-8"?><gresources><gresource prefix="/org/gnome/shell/osk-layouts">
+  <file>sky.json</file>
+  <file>sky-split.json</file>
+</gresource></gresources>

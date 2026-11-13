@@ -35,6 +35,14 @@ printf 'SIZE_MB=4096\nMIN_FREE_MB=8192\nPRIORITY=10\n' > /etc/sky-swapfile.conf
 mkdir -p /etc/sysctl.d; printf 'vm.swappiness=30\n' > /etc/sysctl.d/90-sky-swap.conf
 # journald size cap (the journal had reached 2 GB on the flash root)
 install -D -m644 /tmp/10-sky-journal.conf /etc/systemd/journald.conf.d/10-sky.conf
+# touch keyboard (E037): GNOME's on-screen keyboard with our layouts; staged as /tmp/sky-osk by tools/push-debian.sh, gresource compiled here, enabled by a schema default
+if [ -d /tmp/sky-osk ]; then
+  D=/usr/share/gnome-shell/extensions/sky-osk@redmi-12-5g.local
+  mkdir -p $D; cp -r /tmp/sky-osk/. $D/
+  command -v glib-compile-resources >/dev/null || DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libglib2.0-dev-bin >/dev/null
+  (cd $D/layouts && glib-compile-resources --sourcedir=. --target=$D/sky-osk-layouts.gresource sky-osk.gresource.xml)
+  printf "[org.gnome.shell]\nenabled-extensions=['sky-osk@redmi-12-5g.local']\n" > /usr/share/glib-2.0/schemas/91_sky-osk.gschema.override
+fi
 # no idle suspend (E031 run 3): GNOME default overrides, compiled into the schema cache
 install -m644 /tmp/90_sky-power.gschema.override /usr/share/glib-2.0/schemas/90_sky-power.gschema.override
 install -D -m644 /tmp/61-sky-battery.hwdb /etc/udev/hwdb.d/61-sky-battery.hwdb && systemd-hwdb update

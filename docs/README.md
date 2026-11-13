@@ -8,7 +8,7 @@
 | [INSTALLING](en/INSTALLING.md) recovery_b and Debian root | [INSTALLING](zh-CN/INSTALLING.md) |
 | [RECOVERY](en/RECOVERY.md) safety and getting out of trouble | [RECOVERY](zh-CN/RECOVERY.md) |
 | [ARCHITECTURE](en/ARCHITECTURE.md) boot chain, storage, patches | [ARCHITECTURE](zh-CN/ARCHITECTURE.md) |
-| [AUDIO](en/AUDIO.md), [DISPLAY](en/DISPLAY.md), [GPU](en/GPU.md), [TOUCH](en/TOUCH.md), [WIFI-BT](en/WIFI-BT.md), [POWER](en/POWER.md), [DOCK](en/DOCK.md) | [AUDIO](zh-CN/AUDIO.md), [DISPLAY](zh-CN/DISPLAY.md), [GPU](zh-CN/GPU.md), [TOUCH](zh-CN/TOUCH.md), [WIFI-BT](zh-CN/WIFI-BT.md), [POWER](zh-CN/POWER.md), [DOCK](zh-CN/DOCK.md) |
+| [AUDIO](en/AUDIO.md), [DISPLAY](en/DISPLAY.md), [GPU](en/GPU.md), [TOUCH](en/TOUCH.md), [WIFI-BT](en/WIFI-BT.md), [POWER](en/POWER.md), [DOCK](en/DOCK.md), [KEYBOARD](en/KEYBOARD.md) | [AUDIO](zh-CN/AUDIO.md), [DISPLAY](zh-CN/DISPLAY.md), [GPU](zh-CN/GPU.md), [TOUCH](zh-CN/TOUCH.md), [WIFI-BT](zh-CN/WIFI-BT.md), [POWER](zh-CN/POWER.md), [DOCK](zh-CN/DOCK.md), [KEYBOARD](zh-CN/KEYBOARD.md) |
 | [KNOWN-ISSUES](en/KNOWN-ISSUES.md) | [KNOWN-ISSUES](zh-CN/KNOWN-ISSUES.md) |
 | [UPSTREAMING](en/UPSTREAMING.md) | [UPSTREAMING](zh-CN/UPSTREAMING.md) |
 | [LEARNINGS](en/LEARNINGS.md) lessons for porters (short) | [LEARNINGS](zh-CN/LEARNINGS.md) (long edition) |
