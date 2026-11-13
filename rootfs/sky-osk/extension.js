@@ -28,6 +28,8 @@ const KEEP_PURPOSES = [
 ];
 
 // invisible, inert filler keys: they commit a zero-width space (see tools/gen-sky-osk-layouts.py, SPACER) and only keep the grid columns alive
+// every other key's container (key + its padding) takes touches, so a tap between two keys never falls through to the app below
+// (which would drop the text focus and close the keyboard); only the spacer area, the middle gap, stays click-through
 function hideSpacers(keyboard) {
     for (const layer of Object.values(keyboard._layers ?? {})) {
         for (const key of layer.get_children()) {
@@ -36,6 +38,8 @@ function hideSpacers(keyboard) {
                 key.reactive = false;
                 key.keyButton.reactive = false;
                 key.keyButton.can_focus = false;
+            } else if (key.keyButton) {
+                key.reactive = true;
             }
         }
     }

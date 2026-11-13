@@ -41,7 +41,7 @@ A key has `strings` (the first is typed, the rest appear on long press), optiona
 (`levelSwitch`, `delete`, `emoji`, `languageMenu`, `hide`, `modifier`) with an `iconName` or `label`, or a `keyval` for keys such as Esc and the arrows.
 The portrait layout is 10 columns wide; the split layout is 19.5 columns (left half 6 columns, a 7.5 column gap, right half 6 columns) and `check()` in the generator prints the width of every row so a mismatch is caught when you edit.
 Wide gaps need an invisible spacer key because GNOME's grid drops columns no key touches (the generator does this: `spacers=True`).
-The extension then hides the spacers, makes the split keyboard's containers non-reactive (this is what makes the gap click-through on Wayland, where GNOME does not use the chrome input region) and stretches the grid to the full width.
+The extension then hides the spacers, makes the split keyboard's background and grid non-reactive while every key's container (the key plus its padding) stays reactive. That is what makes only the middle gap click-through on Wayland, where GNOME does not use the chrome input region; a tap between two keys is swallowed by the keyboard instead of reaching the app, because a tap that reaches the app drops its text focus and GNOME then closes the keyboard and stretches the grid to the full width.
 
 Ideas that fit this format: a number row above the letters (add a row), a one-handed layout shifted to one side (leading spacer), a bigger gap or a smaller height for
 the split layout, other punctuation on the thumb layers, a language key in the portrait strip (`lang()`).

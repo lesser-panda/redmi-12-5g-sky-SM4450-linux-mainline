@@ -31,7 +31,7 @@ gnome-extensions enable sky-osk@redmi-12-5g.local
 | 字号、间距、圆角 | `rootfs/sky-osk/stylesheet.css` | 同上 |
 | 行为（何时用哪套布局） | `rootfs/sky-osk/extension.js` | 安装后注销再登录（JavaScript 模块有缓存） |
 
-布局格式是 GNOME Shell 自己的 JSON（见 GNOME Shell 的 `js/ui/keyboard.js`）：`levels`（`default`、`shift`、`opt` = Lower/符号、`opt+shift` = Raise），每层是网格上的若干 `rows`。按键有 `strings`（第一个是输入内容，其余长按时出现），可选 `width`（列数，默认 1）、`leftOffset`，或 `action`（`levelSwitch`、`delete`、`emoji`、`languageMenu`、`hide`、`modifier`）加 `iconName` 或 `label`；Esc、方向键等用 `keyval`。竖屏布局 10 列宽；分体布局 19.5 列（左半 6 列、间隔 7.5 列、右半 6 列），生成器里的 `check()` 会打印每一行的宽度，改动时能立刻发现不齐。宽间隔需要隐形占位键，因为 GNOME 的网格会丢弃没有任何按键占用的列（生成器已处理：`spacers=True`）。扩展随后隐藏占位键，把分体键盘的容器设为不响应输入（Wayland 下 GNOME 不使用 chrome 输入区域，这是间隔可穿透点击的实现方式），并把网格拉伸到整个宽度。
+布局格式是 GNOME Shell 自己的 JSON（见 GNOME Shell 的 `js/ui/keyboard.js`）：`levels`（`default`、`shift`、`opt` = Lower/符号、`opt+shift` = Raise），每层是网格上的若干 `rows`。按键有 `strings`（第一个是输入内容，其余长按时出现），可选 `width`（列数，默认 1）、`leftOffset`，或 `action`（`levelSwitch`、`delete`、`emoji`、`languageMenu`、`hide`、`modifier`）加 `iconName` 或 `label`；Esc、方向键等用 `keyval`。竖屏布局 10 列宽；分体布局 19.5 列（左半 6 列、间隔 7.5 列、右半 6 列），生成器里的 `check()` 会打印每一行的宽度，改动时能立刻发现不齐。宽间隔需要隐形占位键，因为 GNOME 的网格会丢弃没有任何按键占用的列（生成器已处理：`spacers=True`）。扩展随后隐藏占位键，把分体键盘的背景和网格设为不响应输入，而每个按键的容器（按键加内边距）保持响应。这样只有中间的空隙可穿透点击（Wayland 下 GNOME 不使用 chrome 输入区域）；点在两个按键之间会被键盘吞掉，而不会传到应用——传到应用会让文本框失去焦点，GNOME 随即收起键盘，并把网格拉伸到整个宽度。
 
 适合这种格式的想法：字母上方加数字行（加一行）、偏向一侧的单手布局（行首加占位）、更宽的间隔或更矮的分体键盘、拇指层里换别的标点、竖屏功能条里加语言键（`lang()`）。
 
