@@ -17,14 +17,13 @@ import {Keyboard} from 'resource:///org/gnome/shell/ui/keyboard.js';
 // (read when the extension is enabled, so `gnome-extensions disable/enable` applies a change without a new login)
 const DEFAULTS = {portraitHeight: 0.34, landscapeHeight: 0.50};
 
-// purposes that keep GNOME's own special layouts
+// purposes that keep GNOME's own special layouts (terminals use ours: Esc, Tab, Ctrl, Alt and the arrows are on every layer)
 const KEEP_PURPOSES = [
     Clutter.InputContentPurpose.DIGITS,
     Clutter.InputContentPurpose.NUMBER,
     Clutter.InputContentPurpose.PHONE,
     Clutter.InputContentPurpose.EMAIL,
     Clutter.InputContentPurpose.URL,
-    Clutter.InputContentPurpose.TERMINAL,
 ];
 
 // invisible, inert filler keys: they commit a zero-width space (see tools/gen-sky-osk-layouts.py, SPACER) and only keep the grid columns alive
@@ -54,6 +53,27 @@ function applyMode(keyboard, split) {
         keyboard.remove_style_class_name('sky-split');
     keyboard.reactive = !split;
     Main.layoutManager.keyboardBox.reactive = !split;
+}
+
+// key text and icons are sized from the key row height, which is a fixed fraction of the screen, so the keyboard looks the same at any display scale
+// (CSS px would grow or shrink against the keys when the scale changes)
+function sizeKeys(keyboard, cfg) {
+    const monitor = Main.layoutManager.keyboardMonitor;
+    if (!monitor)
+        return;
+    const landscape = monitor.width > monitor.height;
+    const height = monitor.height * (landscape ? cfg.landscapeHeight : cfg.portraitHeight);
+    const rows = keyboard._skyRows ?? 4;
+    const px = Math.max(12, Math.round(height / rows * (cfg.textScale ?? 0.22)));
+    for (const layer of Object.values(keyboard._layers ?? {})) {
+        for (const key of layer.get_children()) {
+            if (!key.keyButton)
+                continue;
+            key.keyButton.style = `font-size: ${px}px;`;
+            if (key._icon)
+                key._icon.style = `icon-size: ${px}px;`;
+        }
+    }
 }
 
 function isLandscape() {
@@ -93,14 +113,21 @@ export default class SkyOsk extends Extension {
                 return;
             this.width = monitor.width;
             this.height = monitor.height * (monitor.width > monitor.height ? cfg.landscapeHeight : cfg.portraitHeight);
+            sizeKeys(this, cfg);
         };
 
         proto._updateLayout = function (groupName, purpose) {
             this._skyLandscape = isLandscape();
-            if (groupName === 'us' && !KEEP_PURPOSES.includes(purpose))
+            if (groupName === 'us' && !KEEP_PURPOSES.includes(purpose)) {
                 groupName = this._skyLandscape ? 'sky-split' : 'sky';
+                // GNOME picks its fixed terminal model for this purpose whatever the group is; ask for a normal one so our layout is used
+                if (purpose === Clutter.InputContentPurpose.TERMINAL)
+                    purpose = Clutter.InputContentPurpose.NORMAL;
+            }
             const ret = origUpdateLayout.call(this, groupName, purpose);
+            this._skyRows = groupName === 'sky' ? 5 : 4;
             hideSpacers(this);
+            sizeKeys(this, cfg);
             applyMode(this, groupName === 'sky-split');
             return ret;
         };

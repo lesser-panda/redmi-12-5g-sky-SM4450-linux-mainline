@@ -11,7 +11,8 @@ with two layouts of our own, delivered as a small GNOME Shell extension, `sky-os
 The split layout's thumb keys work like a Planck: **Lower** gives digits and symbols, **Raise** gives F1-F12, Home/End, PgUp/PgDn, Del, arrows, brackets, emoji and the language key.
 Ctrl, Alt and Super latch for one key press (tap, then the letter).
 
-GNOME's own keyboards stay in place for numbers, phone, e-mail, URL and terminal fields, and for every input source other than `us`.
+GNOME's own keyboards stay in place for number, phone, e-mail and URL fields, and for every input source other than `us`. Terminals use the same layouts (Esc, Tab, Ctrl, Alt and the arrows are on every layer).
+The keyboard height is a fixed fraction of the screen and the key text and icons are sized from the key height (`textScale` in `config.json`, default 0.22 of a row), so it looks the same at every display scale.
 The layout follows the monitor orientation (there are no sensors, rotate in Settings > Displays).
 
 ## When it appears
