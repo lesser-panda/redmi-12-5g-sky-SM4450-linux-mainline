@@ -104,3 +104,6 @@
 
 ## 2026-11-13 touch keyboard revision 2 (E037)
 Ortholinear portrait (10 x 5 with Esc/Tab/Ctrl/Alt/arrows strip) and Planck-style split landscape (6+6, flush to edges, click-through transparent gap, Lower/Raise layers) installed on the running phone (m25 RAM boot) and synced to release/. Verified by screenshots and a shell actor-pick test; typing by touch not yet tested (user to try). Details: docs/EXPERIMENT-013.md.
+
+## 2026-11-13 m25 persisted into recovery_b (E036)
+recovery_b = m25 v2 8ebb8da4e65f17f81b1fce1a63514e3e36e45f7ccf7c76b3e9d04cc62ef118ba, readback equal, 3 boots PASS (SPMI 0 lines, thermal, amp, WiFi/BT, charge limit). Fallback m24 d8e0770e…. Details: docs/EXPERIMENT-012.md.

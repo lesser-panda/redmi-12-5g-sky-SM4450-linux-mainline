@@ -40,3 +40,18 @@ Remove the two things that make the kernel log and journal unusable and add the 
 
 ## Next
 Persist m25 into recovery_b (same recipe as E034: `tools/mk-recovery-v2.sh m25`, readback, 3 cold boots, then check audio/dock/charge-limit) — waiting for the user's go. Also open: thermal trips tuning/GPU cooling (needs a hotter load than the phone reached), `hctosys` reading the garbage RTC at boot (harmless).
+
+## E036 persist plan: m25 into recovery_b (2026-11-13)
+- **Authorization:** user, 2026-11-13: "Persist m25, push commits" (scope: recovery_b only, as for m24; no other partition).
+- **Input:** `tools/mk-recovery-v2.sh m25` -> out/candidates/m25/sky-m25-shim-boot-v2.img, sha256 8ebb8da4e65f17f81b1fce1a63514e3e36e45f7ccf7c76b3e9d04cc62ef118ba (Image e6451c45…, dtb 96d6188b…). RAM boot of the same kernel passed earlier (Run 1). Battery 76 % read on the phone before leaving Debian.
+- **Steps:** `systemctl reboot` (-> Android) -> `adb reboot bootloader` -> `fastboot flash recovery_b` -> `fastboot reboot` -> Android -> readback sha256 -> `adb reboot recovery` -> Debian.
+- **Expectation / pass:** readback hash equals the image; 3 boots from recovery_b show kernel 7.3.0-g105ba85cba0e-dirty, `fs1599` preset line, sound card, 0 failed units, amp ON while playing / OFF after, 0 `disallowed SPMI write` lines after NTP sync, thermal zones present (22), WiFi and Bluetooth up (modules vermagic unchanged), charge limit still active.
+- **Fallback:** m24 v2 d8e0770e… (out/candidates/m24), m23 a79d0b11…; if the phone lands in fastboot: `fastboot boot out/candidates/m25/sky-m25-shim-boot-v4.img` or flash m24.
+
+## E036 persist result (2026-11-13 14:40): PASS
+- `fastboot flash recovery_b` OKAY (95360 KB, bootloader unlocked, slot b); Android readback sha256 of 97648640 bytes = 8ebb8da4e65f17f81b1fce1a63514e3e36e45f7ccf7c76b3e9d04cc62ef118ba (equal to the image).
+- 3 boots from recovery_b (1 from `adb reboot recovery` plus 2 more full Debian -> Android -> recovery cycles): each kernel 7.3.0-g105ba85cba0e-dirty, `fs1599 0-0034: preset … scene 6, 24 register entries`, sound card present, 0 failed units, 0 `disallowed SPMI` lines with NTP synchronised, 23 thermal zones, WLAN interface and Bluetooth controller present, gnome-shell and the sky-osk extension active.
+- Amp registers (i2ctransfer -f, all 3 boots): idle 0x03=0, 0x10=1, 0x11=0; pw-play running 0x03=0x000d, 0x10=0, 0x11=0x00c0; ~14 s after the stream ended back to idle.
+- Charge limit: kernel `charge_control_end_threshold`=80, start=75 (the sky-charge-limit unit reports "kernel charge limit active, nothing to do").
+- Not re-tested: DisplayLink dock (needs the dock attached). Remaining kernel error lines: qcacld `hdd_sysfs_bmiss_create`, one `qcom_battmgr unknown notification: 0x50` (existing, benign).
+- recovery_b now holds **m25** (sha 8ebb8da4e65f17f81b1fce1a63514e3e36e45f7ccf7c76b3e9d04cc62ef118ba); fallbacks m24 v2 d8e0770e…, m23 a79d0b11…, stock recovery private/rom/extracted/recovery.img.
