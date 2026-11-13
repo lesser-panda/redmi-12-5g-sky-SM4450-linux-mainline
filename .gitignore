@@ -1,0 +1,10 @@
+# your own proprietary files and keys: never commit these
+/vendor/
+# build and download output
+/out/
+/sources/
+*.img
+*.fsm
+*.tar
+*.zst
+__pycache__/

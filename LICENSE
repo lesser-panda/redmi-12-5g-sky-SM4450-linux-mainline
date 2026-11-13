@@ -1,0 +1,12 @@
+This repository contains work under several licenses. The SPDX tag at the top of each file is authoritative.
+
+  GPL-2.0-only   Linux kernel patches and drivers (kernel/patches, kernel/third-party), unless a file says otherwise
+  BSD-3-Clause   most device tree sources (dts/), as inherited from the upstream and ROCKNIX SoC description
+  MIT            scripts (tools/, initramfs/, rootfs/), configuration files and documentation (docs/, READMEs)
+
+Full license texts are in LICENSES/. Third-party material keeps its own license and authorship:
+see kernel/third-party/README.md and docs/en/CREDITS.md.
+
+Proprietary files (firmware, vendor drivers, Android images) are not part of this repository and are not licensed by it.
+
+Copyright (c) 2026 Andy Zhang and contributors (for the parts written in this project).
