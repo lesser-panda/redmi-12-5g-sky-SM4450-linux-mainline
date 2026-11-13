@@ -1,7 +1,7 @@
 # Lab notebook (实验笔记)
 
 The original working notes of the bring-up, kept as written: dated, with plans, expected results, pass criteria, results and the failures.
-Mostly Chinese, with English in the later experiments. Experiment IDs (E001-E037) are cited from the code comments and from the main docs.
+Mostly Chinese, with English in the later experiments. Experiment IDs (E001-E038) are cited from the code comments and from the main docs.
 
 How to read it: start with [LOG.md](LOG.md) (chronological), then the experiment files. `EXPERIMENT-006` is the long one (display, touch, GPU, WiFi, Bluetooth, audio, first persistent root).
 `DEVICE.md`, `STORAGE.md`, `RECOVERY.md`, `PANEL.md`, `GPU.md`, `TOUCH.md`, `WIFI-BT.md`, `AUDIO.md` are the per-topic engineering notes the summaries in `docs/en` and `docs/zh-CN` were distilled from.

@@ -14,6 +14,7 @@ checked on the phone, with the evidence in the [lab notebook](../lab-notebook/);
 | Bluetooth | works | WCN3950-class chip on UART2 (mainline `hci_qca`); needs a 1 s power-off to reset reliably |
 | Audio | works (by user) | Speaker (FS1599 amplifier, in-kernel driver), earpiece, bottom microphone, PipeWire + UCM. Headphone jack, USB audio class and Bluetooth audio not tested |
 | USB | works | device mode (ACM + NCM gadget), host mode, DisplayLink dock (HDMI monitor, keyboard, mouse) via evdi |
+| Screen rotation | works (manual) | no usable accelerometer; a top bar menu (portrait, landscape left, landscape right), see [DISPLAY.md](DISPLAY.md) |
 | Touch keyboard | works (by user) | GNOME's on-screen keyboard with our layouts: ortholinear portrait keyboard (with Esc/Tab/Ctrl/Alt/arrows) and a Planck-style landscape split keyboard with a click-through gap, see [KEYBOARD.md](KEYBOARD.md) |
 | Battery, charging | works | telemetry, charge status, software charge limit (stop at 80 %, resume at 75 %) via a Xiaomi-specific control |
 | Keys, RTC | works | power, volume up/down; the PMIC RTC cannot be set from Linux (another subsystem owns it) and reads garbage; the clock comes from NTP, kernel to RTC sync is disabled |

@@ -10,3 +10,11 @@
 - **Cursor:** over an external DisplayLink monitor GNOME needs the software cursor, see [DOCK.md](DOCK.md).
 
 Why the bootloader matters: the display only comes up if the ABL leaves the panel lit. A boot image without a valid `recovery_dtbo` makes the ABL power the panel down; the driver cannot cold-start it ([ARCHITECTURE.md](ARCHITECTURE.md)).
+
+## Rotation
+There is no accelerometer Linux can read (see [STATUS.md](STATUS.md), sensors), so the screen does not rotate by itself. The `sky-rotate` GNOME Shell extension (`rootfs/sky-rotate/`)
+adds a top bar button with a drop-down: **Portrait**, **Landscape left** (top of the phone towards the left, the camera hole on the left) and **Landscape right**; the current one has a dot.
+It asks Mutter's `org.gnome.Mutter.DisplayConfig` D-Bus service to change the transform of the built-in panel only (scale, mode and any dock monitor stay as they are). The configuration is applied as a
+temporary one, which avoids Mutter's "keep these display settings?" countdown, so the extension remembers the choice in `~/.config/sky-rotate/orientation` and applies it again two seconds after login.
+The touch keyboard follows the orientation (portrait or split layout, [KEYBOARD.md](KEYBOARD.md)). Install: `tools/push-debian.sh` puts it into the root filesystem and enables it by default; on a running phone copy `rootfs/sky-rotate/` to
+`~/.local/share/gnome-shell/extensions/sky-rotate@redmi-12-5g.local` and log in again (Wayland only finds new extensions in a new session).

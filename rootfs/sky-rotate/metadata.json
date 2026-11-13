@@ -1,0 +1,8 @@
+{
+  "uuid": "sky-rotate@redmi-12-5g.local",
+  "name": "Sky screen rotation",
+  "description": "Top bar menu to choose the built-in screen's orientation: portrait, landscape left, landscape right (the phone has no rotation sensor).",
+  "shell-version": ["48"],
+  "session-modes": ["user"],
+  "version": 1
+}

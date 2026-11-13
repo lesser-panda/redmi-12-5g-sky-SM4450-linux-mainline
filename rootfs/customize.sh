@@ -41,8 +41,16 @@ if [ -d /tmp/sky-osk ]; then
   mkdir -p $D; cp -r /tmp/sky-osk/. $D/
   command -v glib-compile-resources >/dev/null || DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libglib2.0-dev-bin >/dev/null
   (cd $D/layouts && glib-compile-resources --sourcedir=. --target=$D/sky-osk-layouts.gresource sky-osk.gresource.xml)
-  printf "[org.gnome.shell]\nenabled-extensions=['sky-osk@redmi-12-5g.local']\n" > /usr/share/glib-2.0/schemas/91_sky-osk.gschema.override
 fi
+# top bar screen-rotation menu (E038): staged as /tmp/sky-rotate by tools/push-debian.sh
+if [ -d /tmp/sky-rotate ]; then
+  D=/usr/share/gnome-shell/extensions/sky-rotate@redmi-12-5g.local
+  mkdir -p $D; cp -r /tmp/sky-rotate/. $D/
+fi
+# enable both by a schema default
+EXT=""; [ -d /tmp/sky-osk ] && EXT="'sky-osk@redmi-12-5g.local'"
+[ -d /tmp/sky-rotate ] && EXT="${EXT:+$EXT, }'sky-rotate@redmi-12-5g.local'"
+[ -n "$EXT" ] && printf "[org.gnome.shell]\nenabled-extensions=[$EXT]\n" > /usr/share/glib-2.0/schemas/91_sky-osk.gschema.override
 # no idle suspend (E031 run 3): GNOME default overrides, compiled into the schema cache
 install -m644 /tmp/90_sky-power.gschema.override /usr/share/glib-2.0/schemas/90_sky-power.gschema.override
 install -D -m644 /tmp/61-sky-battery.hwdb /etc/udev/hwdb.d/61-sky-battery.hwdb && systemd-hwdb update

@@ -107,3 +107,6 @@ Ortholinear portrait (10 x 5 with Esc/Tab/Ctrl/Alt/arrows strip) and Planck-styl
 
 ## 2026-11-13 m25 persisted into recovery_b (E036)
 recovery_b = m25 v2 8ebb8da4e65f17f81b1fce1a63514e3e36e45f7ccf7c76b3e9d04cc62ef118ba, readback equal, 3 boots PASS (SPMI 0 lines, thermal, amp, WiFi/BT, charge limit). Fallback m24 d8e0770e…. Details: docs/EXPERIMENT-012.md.
+
+## 2026-11-13 screen rotation top bar extension (E038)
+sky-rotate: portrait / landscape left / landscape right menu, temporary Mutter config + remembered in ~/.config/sky-rotate/orientation. Details docs/EXPERIMENT-014.md. Display left in landscape left (transform 3, scale 1.5).
