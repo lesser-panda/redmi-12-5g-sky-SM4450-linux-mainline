@@ -99,3 +99,4 @@
 - 2026-11-13: tools/tone-detect.py and tools/swrpoke.sh retired too (archived with the other audio debug scripts). Publication prep started on user request (no push; see docs/PUBLISHING.md once written).
 - 2026-11-13: publication prep: docs/PUBLISHING.md (decisions, plan), tools/release-scan.sh (privacy/licence scan), LICENSES/ (GPL-2.0-only, MIT); 2 personal-data hits fixed. Nothing pushed.
 - 2026-11-13 E035: clean-checkout build of the published tree (release/) booted from RAM: Debian, fs1599 preset loaded, card/GPU/display/input/BT up; out-of-tree modules (qcacld, evdi) fail on the new kernel build as expected; AUTOROOT=0 variant built, not booted. See EXPERIMENT-011.md.
+- 2026-11-13 E036: m25 (RTC_SYSTOHC off, rate-limited SPMI message, 22 thermal zones, quiet qcacld) RAM-booted: SPMI spam 0, zones read 30-60 C under load, WiFi/BT fine. recovery_b still m24; persisting m25 awaits the user's go. See EXPERIMENT-012.md.

@@ -1,6 +1,6 @@
 # Credits
 
-- **ROCKNIX** ([github.com/ROCKNIX/distribution](https://github.com/ROCKNIX/distribution)): the SM4450 kernel patch queue (GPU, display, clocks, interconnect, remoteprocs, regulators, Bluetooth, battery). Authors are preserved in `kernel/third-party/rocknix/`.
+- **ROCKNIX** ([github.com/ROCKNIX/distribution](https://github.com/ROCKNIX/distribution)): the SM4450 kernel patch queue (GPU, display, clocks, interconnect, remoteprocs, regulators, Bluetooth, battery). Authors are preserved in `kernel/third-party/rocknix/`. The SoC temperature-sensor nodes and thermal zones in `dts/sm4450-xiaomi-sky.dts` (marked there) come from the ROCKNIX SM4450 board device tree (BSD-3-Clause).
 - **orange200213 / sky-linux** ([github.com/orange200213/sky-linux](https://github.com/orange200213/sky-linux)): first mainline bring-up of the sky, the shim boot method, the `ktd3136` driver, and the WiFi driver port that is used as is.
 - **Linux kernel, linux-msm, Linaro, Qualcomm** upstream developers: `sm8450` audio, `sc8280xp` sound card, AudioReach topologies (`linux-msm/audioreach-topology`, BSD-3-Clause), `panel-visionox-r66451`.
 - **Mesa** freedreno/turnip authors; **Debian** and **GNOME** projects; **Alpine Linux** for the small initramfs userland; **DisplayLink/Synaptics** (`evdi` is GPL-2.0, the manager binary is proprietary and not distributed).

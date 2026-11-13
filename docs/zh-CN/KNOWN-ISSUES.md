@@ -10,15 +10,15 @@
 - **USB 主机在位时恢复：** 见过一次约 35 秒的 xHCI 恢复超时，需要重绑 `dwc3-qcom` 才恢复（补丁 0008 里有恢复修复，假设未完全证实）。
 - **Debian 里 `reboot -f`** 曾让手机失联一次；请用 `systemctl reboot`。
 - **glmark2** 在负载测试的某些时段得分下降约 15 %，原因未找到。
-- **PMIC RTC** 不保持时间（开机靠 NTP）；SPMI RTC 驱动日志很吵。
+- **PMIC RTC** Linux 不能写（SPMI 仲裁器拒绝写入，该外设归别的子系统），不保持时间；开机靠 NTP 设时钟。`CONFIG_RTC_SYSTOHC` 已关闭：此前每次 NTP 同步，内核都会以约每秒 60 次的频率重试被拒绝的写入（日志里是 `disallowed SPMI write to sid=0, addr=0x6146`；这条消息现在也做了限速）。
 - **蓝牙** 需要 1 秒最短断电补丁，冷启动后才能可靠起来。
-- **WLAN 驱动** 在 debug 级别日志很多；厂商 `qcacld` 驱动是树外的，必须与内核完全匹配。
+- **WLAN 驱动：** 厂商 `qcacld` 驱动是树外的，必须与内核完全匹配。它遗留的 `sky-dbg` 调试输出已静音（`tools/qcacld-quiet-debug.patch`，由 `build-wifi-modules.sh` 应用）；仍有一些 info 级别的驱动日志。
 
 ## 代码与配置债
 - (code) 内核树里留有 GPU 调试代码（CP 初始化失败时的寄存器转储、固件回读检查）。
 - (code) A613 目录项报告 `revn = 612`，让 Mesa 26.1.x 接受它。Mesa 认识该 id 后改回 613。
 - (code) 为了让树与测试过的一致，保留了这台手机不用的 ROCKNIX 文件：`rsinput.c`、`aw88166.c`、一处 ath10k 修改。
-- (code) 设备树还没有 SoC 温度区和较低的 CPU 最大频率限制。
+- (code) 温度区来自 ROCKNIX 的 SM4450 板级文件，使用通用的 95 °C / 115 °C 触发点，没有针对这台手机调整，降频也未触发过；还没有较低的 CPU 最大频率限制。
 - (code) 启动镜像里的 Android header 花样（v2 header、原厂 DTB blob、`recovery_dtbo`）只是为了满足 ABL。
 - (rootfs) `rootfs/` 脚本面向 Debian trixie，用的是自制的 `debootstrap --foreign` 替代品，不是为复用设计的。
 - **树外模块与内核构建绑定。** `qcacld`（WiFi）和 `evdi`（坞）必须针对你构建的每个内核重新编译；别的构建出的模块会报 "Invalid module format"，`sky-wifi.service` / `sky-evdi.service` 会失败。根文件系统脚本针对 `sources/linux-7.3` 构建它们。

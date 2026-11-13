@@ -5,7 +5,7 @@ checked on the phone, with the evidence in the [lab notebook](../lab-notebook/);
 
 | Area | State | Notes |
 |---|---|---|
-| CPU, RAM | works | 8 cores, full 8 GB (memory pattern test, no mismatches). cpufreq works; the DT has no SoC thermal zones yet |
+| CPU, RAM | works | 8 cores, full 8 GB (memory pattern test, no mismatches). cpufreq works; 22 SoC thermal zones (CPU, GPU, DDR, modem, camera, video) read plausible temperatures and follow a load test (about 60 C with 8 busy cores, back to 31 C in 25 s); the 95 C throttling trips are in the DT but have not been reached |
 | Storage (UFS) | works | HS-G3 x2, ~930 MB/s sequential read; ext4 root on the internal flash |
 | Display | works (by user) | DSI panel 1080x2460 with DSC, driven by `msm`; brightness via KTD3136 |
 | GPU | works | Adreno 613, Mesa freedreno (GLES 3.2) and turnip (Vulkan 1.0); GNOME runs accelerated |
@@ -15,7 +15,7 @@ checked on the phone, with the evidence in the [lab notebook](../lab-notebook/);
 | Audio | works (by user) | Speaker (FS1599 amplifier, in-kernel driver), earpiece, bottom microphone, PipeWire + UCM. Headphone jack, USB audio class and Bluetooth audio not tested |
 | USB | works | device mode (ACM + NCM gadget), host mode, DisplayLink dock (HDMI monitor, keyboard, mouse) via evdi |
 | Battery, charging | works | telemetry, charge status, software charge limit (stop at 80 %, resume at 75 %) via a Xiaomi-specific control |
-| Keys, RTC | works | power, volume up/down; PMIC RTC does not keep time over power loss (NTP sets it) |
+| Keys, RTC | works | power, volume up/down; the PMIC RTC cannot be set from Linux (another subsystem owns it) and reads garbage; the clock comes from NTP, kernel to RTC sync is disabled |
 | Suspend | partly | s2idle and deep suspend enter and resume (RTC, power key, volume up); with the dock attached the phone sometimes wakes by itself after 0.1-2 s, source unknown. GNOME is configured not to suspend on idle |
 | Stability | verified | 6.5 h synthetic load test (CPU, memory pressure, storage verify, GPU, WiFi) with no kernel errors, OOM kills or data errors |
 | Cellular modem | not working | calls, SMS, mobile data not started (modem is firmware on the ADSP/modem subsystem) |

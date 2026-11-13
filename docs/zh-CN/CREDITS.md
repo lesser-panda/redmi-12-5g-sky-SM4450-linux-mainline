@@ -1,6 +1,6 @@
 # 致谢
 
-- **ROCKNIX**（[github.com/ROCKNIX/distribution](https://github.com/ROCKNIX/distribution)）：SM4450 内核补丁队列（GPU、显示、时钟、互连、remoteproc、稳压器、蓝牙、电池）。作者信息保留在 `kernel/third-party/rocknix/`。
+- **ROCKNIX**（[github.com/ROCKNIX/distribution](https://github.com/ROCKNIX/distribution)）：SM4450 内核补丁队列（GPU、显示、时钟、互连、remoteproc、稳压器、蓝牙、电池）。作者信息保留在 `kernel/third-party/rocknix/`。`dts/sm4450-xiaomi-sky.dts` 中的 SoC 温度传感器节点和温度区（文件里有标注）来自 ROCKNIX 的 SM4450 板级设备树（BSD-3-Clause）。
 - **orange200213 / sky-linux**（[github.com/orange200213/sky-linux](https://github.com/orange200213/sky-linux)）：sky 的首次主线 bring-up、shim 启动方法、`ktd3136` 驱动，以及原样使用的 WiFi 驱动移植。
 - **Linux 内核、linux-msm、Linaro、高通** 上游开发者：`sm8450` 音频、`sc8280xp` 声卡、AudioReach 拓扑（`linux-msm/audioreach-topology`，BSD-3-Clause）、`panel-visionox-r66451`。
 - **Mesa** freedreno/turnip 作者；**Debian** 与 **GNOME** 项目；**Alpine Linux**（小 initramfs 用户态）；**DisplayLink/Synaptics**（`evdi` 是 GPL-2.0，manager 二进制是专有的，不随仓库分发）。
