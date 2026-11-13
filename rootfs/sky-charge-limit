@@ -1,0 +1,30 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# Charge limiter for the Redmi 12 5G (sky): suspends the charger input at LIMIT % and resumes it at RESUME %.
+# Uses the local battmgr debug attribute xm_set (kernel patch, docs/EXPERIMENT-006.md E024): property 3 = Xiaomi input_suspend.
+# Config: /etc/sky-charge-limit.conf (LIMIT, RESUME, INTERVAL). Safety: never suspends below FLOOR %, resumes on exit.
+LIMIT=80; RESUME=75; INTERVAL=30; FLOOR=30
+[ -r /etc/sky-charge-limit.conf ] && . /etc/sky-charge-limit.conf
+X=/sys/bus/auxiliary/devices/pmic_glink.power-supply.0/xm_set
+B=/sys/class/power_supply/battery
+# Kernels with the qcom_battmgr software limit (m22+) report a non-zero charge_control_end_threshold and do the job themselves
+# (event driven, also without userspace); older kernels read 0 there and this script stays in charge.
+kernel_limit() { [ "$(cat $B/charge_control_end_threshold 2>/dev/null || echo 0)" -gt 0 ]; }
+if [ "$1" = --release ]; then kernel_limit || echo "3 0" > "$X" 2>/dev/null; exit 0; fi
+if kernel_limit; then logger -t sky-charge-limit "kernel charge limit active (end threshold $(cat $B/charge_control_end_threshold)%), nothing to do"; exit 0; fi
+STATE=/run/sky-charge-limit.state
+suspended=0
+set_suspend() { echo "3 $1" > "$X" 2>/dev/null && suspended=$1 && echo "$1" > "$STATE"; }
+trap 'set_suspend 0; exit 0' TERM INT
+[ -e "$X" ] || { echo "no $X (kernel without the xm_set patch)" >&2; exit 1; }
+set_suspend 0
+while :; do
+	cap=$(cat $B/capacity 2>/dev/null)
+	if [ -n "$cap" ]; then
+		if [ "$suspended" = 0 ] && [ "$cap" -ge "$LIMIT" ] && [ "$cap" -gt "$FLOOR" ]; then set_suspend 1; logger -t sky-charge-limit "capacity $cap% >= $LIMIT%: charger input suspended"
+		elif [ "$suspended" = 1 ] && { [ "$cap" -le "$RESUME" ] || [ "$cap" -le "$FLOOR" ]; }; then set_suspend 0; logger -t sky-charge-limit "capacity $cap% <= $RESUME%: charger input resumed"
+		# The firmware drops input_suspend when the charger is replugged (cable moved dock -> laptop, 2026-11-12): re-assert it.
+		elif [ "$suspended" = 1 ] && [ "$(cat $B/status 2>/dev/null)" = Charging ]; then set_suspend 1; logger -t sky-charge-limit "capacity $cap%: battery is Charging although input is suspended (charger replugged?), suspend re-asserted"; fi
+	fi
+	sleep "$INTERVAL"
+done

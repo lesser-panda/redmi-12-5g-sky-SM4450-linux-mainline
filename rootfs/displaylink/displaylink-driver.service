@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: MIT
+[Unit]
+Description=DisplayLink Driver Service (sky: prebuilt evdi.ko, no dkms)
+After=display-manager.service
+Conflicts=getty@tty7.service
+
+[Service]
+ExecStartPre=/bin/sh -c 'grep -q "^evdi " /proc/modules || insmod /usr/local/lib/sky-modules/evdi.ko'
+ExecStart=/opt/displaylink/DisplayLinkManager
+Restart=always
+WorkingDirectory=/opt/displaylink
+RestartSec=5

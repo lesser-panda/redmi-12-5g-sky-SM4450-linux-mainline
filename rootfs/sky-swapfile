@@ -1,0 +1,27 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# Create (once) and enable the swap file on the persistent ext4 root (E031). Config: /etc/sky-swapfile.conf (SIZE_MB, MIN_FREE_MB, FILE, PRIORITY).
+# Skips quietly on a RAM root (tmpfs) and when the disk would be left too full. Idempotent: safe to run at every boot.
+SIZE_MB=4096; MIN_FREE_MB=8192; FILE=/swapfile; PRIORITY=10
+[ -r /etc/sky-swapfile.conf ] && . /etc/sky-swapfile.conf
+[ "$(findmnt -no FSTYPE /)" = ext4 ] || { echo "root is not ext4 (RAM root?): no swap file"; exit 0; }
+swapon --show=NAME --noheadings | grep -qx "$FILE" && { echo "$FILE already active"; exit 0; }
+mk() { # $1 = fallocate|dd
+  rm -f "$FILE.new"; umask 077
+  if [ "$1" = fallocate ]; then fallocate -l "${SIZE_MB}M" "$FILE.new" || return 1
+  else dd if=/dev/zero of="$FILE.new" bs=1M count="$SIZE_MB" conv=fsync status=none || return 1; fi
+  chmod 600 "$FILE.new"; mkswap -q -L swapfile "$FILE.new" >/dev/null && mv "$FILE.new" "$FILE"
+}
+if [ ! -f "$FILE" ]; then
+  free_mb=$(df -Pm / | awk 'NR==2{print $4}')
+  [ "$free_mb" -ge $((SIZE_MB + MIN_FREE_MB)) ] || { echo "only ${free_mb} MiB free: not creating $FILE"; exit 0; }
+  mk fallocate || { echo "cannot create $FILE" >&2; exit 1; }
+  echo "created $FILE (${SIZE_MB} MiB)"
+fi
+chmod 600 "$FILE"
+blkid -p "$FILE" 2>/dev/null | grep -q swap || mkswap -q -L swapfile "$FILE" >/dev/null
+if ! swapon -p "$PRIORITY" "$FILE"; then
+  echo "swapon failed on a fallocate'd file, recreating with dd" >&2
+  rm -f "$FILE"; mk dd && swapon -p "$PRIORITY" "$FILE" || exit 1
+fi
+echo "swap enabled: $(swapon --show=NAME,SIZE --noheadings | tr '\n' ' ')"

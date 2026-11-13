@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: MIT
+# sky: no suspend from idle and from the power button. Deep suspend with the USB host stack/dock attached did not resume (E031 run 3); the power key
+# must wake a blanked screen (any input does) instead of suspending the phone.
+[org.gnome.settings-daemon.plugins.power]
+sleep-inactive-ac-type='nothing'
+sleep-inactive-battery-type='nothing'
+power-button-action='nothing'

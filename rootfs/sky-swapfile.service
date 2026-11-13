@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: MIT
+[Unit]
+Description=Create and enable the swap file (sky)
+After=local-fs.target
+ConditionPathIsReadWrite=/
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+TimeoutStartSec=900
+ExecStart=/usr/local/sbin/sky-swapfile
+ExecStop=-/usr/sbin/swapoff /swapfile
+
+[Install]
+WantedBy=multi-user.target

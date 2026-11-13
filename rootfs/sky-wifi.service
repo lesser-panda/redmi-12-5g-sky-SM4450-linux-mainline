@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: MIT
+[Unit]
+Description=Load the Redmi 12 5G WiFi modules (out-of-tree icnss2/qcacld)
+Before=NetworkManager.service
+After=systemd-udevd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/sky-wifi-up
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,22 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# Compressed-RAM swap (E031). Needs a kernel with CONFIG_ZRAM (m21 and later); on older kernels it skips quietly, so it is safe everywhere.
+# usage: sky-zram start|stop     config: /etc/sky-zram.conf (SIZE_PCT of RAM, ALGO, PRIORITY, SWAPPINESS)
+SIZE_PCT=50; ALGO=zstd; PRIORITY=100; SWAPPINESS=100
+[ -r /etc/sky-zram.conf ] && . /etc/sky-zram.conf
+STATE=/run/sky-zram.dev
+case "$1" in
+start)
+  [ -d /sys/class/zram-control ] || { echo "kernel has no zram: skipping"; exit 0; }
+  [ -s $STATE ] && swapon --show=NAME --noheadings | grep -qx "$(cat $STATE)" && { echo "zram swap already active"; exit 0; }
+  kb=$(awk '/^MemTotal/{print int($2*'"$SIZE_PCT"'/100)}' /proc/meminfo)
+  dev=$(zramctl --find --size "${kb}KiB" --algorithm "$ALGO" 2>/dev/null) || { echo "algorithm $ALGO unavailable, using the kernel default" >&2; dev=$(zramctl --find --size "${kb}KiB") || exit 1; }
+  mkswap -q -L zram "$dev" >/dev/null && swapon -p "$PRIORITY" "$dev" || { zramctl --reset "$dev"; exit 1; }
+  echo "$dev" > $STATE
+  sysctl -q -w vm.swappiness="$SWAPPINESS" vm.page-cluster=0
+  echo "zram swap on $dev: $(zramctl --noheadings --output NAME,ALGORITHM,DISKSIZE "$dev")";;
+stop)
+  [ -s $STATE ] || exit 0
+  dev=$(cat $STATE); swapoff "$dev" 2>/dev/null; zramctl --reset "$dev"; rm -f $STATE;;
+*) echo "usage: $0 start|stop" >&2; exit 2;;
+esac

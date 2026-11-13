@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: MIT
+# sky (Redmi 12 5G): tell UPower that this battery supports charge thresholds (workaround, see docs/EXPERIMENT-009.md run 11).
+# UPower 1.90 only reports ChargeThresholdSupported when the udev property CHARGE_LIMIT is set from hwdb; the upstream generic entry
+# (battery:*:*:dmi:*) needs DMI, which a devicetree-only phone does not have. The kernel (qcom_battmgr, local patch) implements the
+# charge_control_{start,end}_threshold files; these numbers are only the choice offered by the UI (start,end).
+# Key: battery:<kernel name>:<model_name>:<dmi modalias, empty here>
+battery:battery:NVT_WINGTECH_S88019AA1*:
+ CHARGE_LIMIT=75,80

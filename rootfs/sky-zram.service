@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: MIT
+[Unit]
+Description=Compressed RAM swap (zram, sky)
+After=local-fs.target systemd-sysctl.service
+ConditionPathExists=/sys/class/zram-control
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/sky-zram start
+ExecStop=/usr/local/sbin/sky-zram stop
+
+[Install]
+WantedBy=multi-user.target

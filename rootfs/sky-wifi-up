@@ -1,0 +1,13 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# Load the out-of-tree WiFi stack (third-party sky-qcacld modules built by tools/build-wifi-modules.sh; vermagic must equal the running kernel) in the
+# order learned in E016. NetworkManager then manages wlan0. Project script, GPL-2.0-only.
+set -e
+cd /root/wifi
+[ -d /sys/class/net/wlan0 ] && exit 0
+insmod cnss_utils.ko
+insmod wlan_firmware_service.ko
+insmod icnss2.ko
+for i in $(seq 1 30); do dmesg | grep -q "WLAN FW is ready" && break; sleep 1; done
+dmesg | grep -q "WLAN FW is ready" || { echo "WLAN FW not ready" >&2; exit 1; }
+insmod wlan.ko

@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: MIT
+[Unit]
+Description=Sky charge limiter (suspend charger input at LIMIT, resume at RESUME)
+After=multi-user.target
+
+[Service]
+ExecStart=/usr/local/bin/sky-charge-limit
+Restart=on-failure
+ExecStopPost=/usr/local/bin/sky-charge-limit --release
+
+[Install]
+WantedBy=multi-user.target

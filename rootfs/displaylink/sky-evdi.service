@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: MIT
+[Unit]
+Description=Pre-create an evdi DRM device before the display manager starts (sky)
+Documentation=file:///usr/share/doc/displaylink/README
+Before=display-manager.service
+ConditionPathExists=/usr/local/lib/sky-modules/evdi.ko
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Mutter (GNOME 48) never builds monitors for an evdi GPU that appears after the compositor started; with the device already there it handles the dock's hotplug.
+ExecStart=/bin/sh -c 'grep -q "^evdi " /proc/modules || insmod /usr/local/lib/sky-modules/evdi.ko initial_device_count=1'
+
+[Install]
+WantedBy=multi-user.target
